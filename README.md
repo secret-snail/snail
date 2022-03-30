@@ -34,6 +34,8 @@ make
 
 Binary is located in `snail/build/bin/snail`
 
+After making changes to source code, you only need to re-run `make`
+
 # Setup
 Save an image of a "ChArUco" board (chessboard of ArUco markers)
 ```
