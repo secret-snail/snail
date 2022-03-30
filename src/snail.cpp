@@ -80,7 +80,7 @@ void calibrateCharucoBoard() {
     cv::Ptr<cv::aruco::DetectorParameters> detectorParams = cv::aruco::DetectorParameters::create(); // can also read from file
 
     cv::VideoCapture inputVideo;
-    inputVideo.open(15,2); // -1 is autodetect, otherwise set to /dev/video*
+    inputVideo.open(-1); // -1 is autodetect, otherwise set to /dev/video*
 
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
     cv::Ptr<cv::aruco::CharucoBoard> charucoboard = cv::aruco::CharucoBoard::create(5, 7, 0.04f, 0.02f, dictionary);
