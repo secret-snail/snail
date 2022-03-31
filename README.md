@@ -1,4 +1,8 @@
 # Installation
+Note you need the version of raspian with a UI (not lite) for GTK support.
+You can upgrade lite to full.
+After running the first cmake command below, check GTK is ON in command output.
+
 First install opencv (in home directory)
 ```
 # Install minimal prerequisites (Ubuntu 18.04 as reference)
@@ -23,7 +27,7 @@ cmake --build .
 sudo make install
 ```
 
-Then build the source
+Then build the source. Note the build directory is different than OpenCV's.
 ```
 cd snail/
 mkdir build
@@ -42,13 +46,13 @@ Save an image of a "ChArUco" board (chessboard of ArUco markers)
 snail -c1
 ```
 
-Print a photo of the board, then calibrate the pi cam. Should only take a few frames.
+Print a photo of the board (as large as possible), then calibrate the pi cam. Should only take a few frames.
 ```
 snail -c2
 ```
 
 # Run
-Run pose estimation
+Run pose estimation. Press ESC to stop.
 ```
 snail -c3
 ```

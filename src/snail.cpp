@@ -228,7 +228,7 @@ void calibrateCharucoBoard() {
 
 void detectCharucoBoardWithCalibrationPose() {
     cv::VideoCapture inputVideo;
-    inputVideo.open(1); // set to /dev/video*
+    inputVideo.open(-1); // -1 is autodetect, otherwise set to /dev/video*
 
     cv::Mat cameraMatrix, distCoeffs;
     bool readOk = readCameraParameters(calibFile, cameraMatrix, distCoeffs);
@@ -288,7 +288,7 @@ int main(int argc, char* argv[])
         break;
     case 2:
         calibrateCharucoBoard();
-		break;
+        break;
     case 3:
         detectCharucoBoardWithCalibrationPose();
         break;
