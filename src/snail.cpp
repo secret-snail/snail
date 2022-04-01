@@ -248,13 +248,15 @@ void detectCharucoBoardWithCalibrationPose() {
     cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.08f, 0.04f, dictionary);
     cv::Ptr<cv::aruco::DetectorParameters> params = cv::aruco::DetectorParameters::create();
 
-    cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
+    cv::Vec3d s_rvec={0,0,0}, s_tvec={0,0,1};
 
+#ifdef SECURE
     int baseport = 8080;
     emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
     emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
     std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
         << " bob port: " << baseport+emp::BOB*17 << std::endl;
+#endif
 
     while (inputVideo.grab()) {
         cv::Mat image;
@@ -274,12 +276,21 @@ void detectCharucoBoardWithCalibrationPose() {
             if (charucoIds.size() > 0) {
                 cv::Scalar color = cv::Scalar(255, 0, 0);
                 cv::aruco::drawDetectedCornersCharuco(imageCopy, charucoCorners, charucoIds, color);
-                std::cout << "running localization" << std::endl;
-                //bool valid = cv::aruco::estimatePoseCharucoBoard(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec);
-                bool valid = estimatePoseCharucoBoard_Secure(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec, true, aliceio, bobio);
+#ifdef SECURE
+                bool s_valid = estimatePoseCharucoBoard_Secure(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
+#endif
+                cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
+                bool valid = cv::aruco::estimatePoseCharucoBoard(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec);
+                std::cout << "plaintext pose:\n"
+                    << rvec << tvec
+                    << std::endl;
                 // if charuco pose is valid
                 if (valid)
+#ifdef SECURE
+                    cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, s_rvec, s_tvec, 0.1f);
+#else
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);
+#endif
             }
         }
         cv::imshow("out", imageCopy);
