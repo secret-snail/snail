@@ -1,4 +1,6 @@
 # Installation
+This project uses git submodules. Pull with `git submodule update --init --recursive`.
+
 Note you need the version of raspian with a UI (not lite) for GTK support.
 You can upgrade lite to full.
 After running the first cmake command below, check GTK is ON in command output.
@@ -26,6 +28,17 @@ cmake --build .
 # Install
 sudo make install
 ```
+
+Next modify emp library. Need to change `extern/utils/block.h`, the two places where it says
+```
+#elif __aarch64__
+```
+Change to:
+```
+#elif __arm__
+```
+Also need to modify `extern/utils/aes.h` but in this case you want the x86 code on line 106 to run and not the __aarch64__.
+This is because ssetoneon takes care of transforming compiler intrinsics for you as the aarch64 ones don't work (no crypto built into pi g++ compiler.)
 
 Then build the source. Note the build directory is different than OpenCV's.
 ```

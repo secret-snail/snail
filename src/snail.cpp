@@ -2,8 +2,14 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
+
 #include <iostream>
 #include <string>
+
+#include <emp_client.h>
+
+#include <emp-tool/io/net_io_channel.h>
+#include <emp-tool/utils/constants.h>
 
 namespace {
 const char* about = "ChArUco-based snail localization";
@@ -11,9 +17,11 @@ const char* keys = "{c        |       | Put value of c=1 to create charuco board
 }
 
 const std::string calibFile="/home/pi/calib.txt";
+#define OFFLOAD_IP "192.168.11.32"
 
 void createBoard();
 void detectCharucoBoardWithCalibrationPose();
+
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -63,9 +71,9 @@ static bool saveCameraParams(const std::string &filename, cv::Size imageSize, fl
 
 void createBoard() {
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
-    cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.04f, 0.02f, dictionary);
+    cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.08f, 0.04f, dictionary);
     cv::Mat boardImage;
-    board->draw(cv::Size(600, 500), boardImage, 10, 1);
+    board->draw(cv::Size(800, 1100), boardImage, 10, 1);
     cv::imwrite("BoardImage.jpg", boardImage);
 }
 
@@ -83,7 +91,7 @@ void calibrateCharucoBoard() {
     inputVideo.open(-1); // -1 is autodetect, otherwise set to /dev/video*
 
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
-    cv::Ptr<cv::aruco::CharucoBoard> charucoboard = cv::aruco::CharucoBoard::create(5, 7, 0.04f, 0.02f, dictionary);
+    cv::Ptr<cv::aruco::CharucoBoard> charucoboard = cv::aruco::CharucoBoard::create(5, 7, 0.08f, 0.04f, dictionary);
     cv::Ptr<cv::aruco::Board> board = charucoboard.staticCast<cv::aruco::Board>();
 
     // collect data from each frame
@@ -237,8 +245,16 @@ void detectCharucoBoardWithCalibrationPose() {
         return;
     }
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
-    cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.04f, 0.02f, dictionary);
+    cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.08f, 0.04f, dictionary);
     cv::Ptr<cv::aruco::DetectorParameters> params = cv::aruco::DetectorParameters::create();
+
+    cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
+
+    int baseport = 8080;
+    emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
+    emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
+    std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
+        << " bob port: " << baseport+emp::BOB*17 << std::endl;
 
     while (inputVideo.grab()) {
         cv::Mat image;
@@ -258,8 +274,9 @@ void detectCharucoBoardWithCalibrationPose() {
             if (charucoIds.size() > 0) {
                 cv::Scalar color = cv::Scalar(255, 0, 0);
                 cv::aruco::drawDetectedCornersCharuco(imageCopy, charucoCorners, charucoIds, color);
-                cv::Vec3d rvec, tvec;
-                bool valid = cv::aruco::estimatePoseCharucoBoard(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec);
+                std::cout << "running localization" << std::endl;
+                //bool valid = cv::aruco::estimatePoseCharucoBoard(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec);
+                bool valid = estimatePoseCharucoBoard_Secure(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec, true, aliceio, bobio);
                 // if charuco pose is valid
                 if (valid)
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);

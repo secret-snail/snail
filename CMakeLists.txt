@@ -1,9 +1,8 @@
 cmake_minimum_required(VERSION 3.12)
 project(Snail LANGUAGES CXX)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -std=c++17")
-#set(CMAKE_C_FLAGS "-pthread -Wall -march=native -O3 -maes -mrdseed") # EMP
-set(CMAKE_C_FLAGS "-Wall -march=native -O3") # EMP
+#set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -std=c++17 -march=native -mfpu=neon")
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -std=c++17 -march=native -mfpu=neon")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -ggdb -fno-omit-frame-pointer")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")

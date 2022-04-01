@@ -1,0 +1,3 @@
+[submodule "extern/emp-tool"]
+	path = extern/emp-tool
+	url = https://github.com/emp-toolkit/emp-tool
