@@ -252,6 +252,7 @@ void detectCharucoBoardWithCalibrationPose() {
 
 #ifdef SECURE
     int baseport = 8080;
+    std::cout << "Connecting to alice and bob..." << std::endl;
     emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
     emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
     std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
@@ -277,6 +278,8 @@ void detectCharucoBoardWithCalibrationPose() {
                 cv::Scalar color = cv::Scalar(255, 0, 0);
                 cv::aruco::drawDetectedCornersCharuco(imageCopy, charucoCorners, charucoIds, color);
 #ifdef SECURE
+                cv::Mat undist_corners;
+                cv::undistortPoints(charucoCorners, undist_corners, cameraMatrix, distCoeffs);
                 bool s_valid = estimatePoseCharucoBoard_Secure(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
 #endif
                 cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
@@ -288,9 +291,8 @@ void detectCharucoBoardWithCalibrationPose() {
                 if (valid)
 #ifdef SECURE
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, s_rvec, s_tvec, 0.1f);
-#else
-                    cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);
 #endif
+                    cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);
             }
         }
         cv::imshow("out", imageCopy);

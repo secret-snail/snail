@@ -54,6 +54,13 @@ Binary is located in `snail/build/bin/snail`
 After making changes to source code, you only need to re-run `make`
 
 # Setup
+First check (and maybe increase) camera resolution.
+
+```
+sudo v4l2-ctl -V
+sudo v4l2-ctl -v width=1024,height=768
+```
+
 Save an image of a "ChArUco" board (chessboard of ArUco markers)
 ```
 snail -c1
