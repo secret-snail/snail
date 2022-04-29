@@ -5,6 +5,8 @@ Note you need the version of raspian with a UI (not lite) for GTK support.
 You can upgrade lite to full.
 After running the first cmake command below, check GTK is ON in command output.
 
+
+
 First install opencv (in home directory)
 ```
 # Install minimal prerequisites (Ubuntu 18.04 as reference)
@@ -36,6 +38,18 @@ cmake --build .
 sudo make install
 ```
 
+Next install VISP (in home directory)
+```
+sudo apt-get install build-essential libx11-dev liblapack-dev libeigen3-dev libv4l-dev libzbar-dev libpthread-stubs0-dev libdc1394-dev
+
+git clone https://github.com/lagadic/visp.git
+cd visp
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+```
+
 Next modify emp library. Need to change `snail/extern/emp-tool/emp-tool/utils/block.h`, the two places where it says
 ```
 #elif __aarch64__
@@ -52,6 +66,8 @@ Install emp-tool deps
 ```
 sudo apt install libssl-dev
 ```
+
+
 
 Then build the source. Note the build directory is different than OpenCV's.
 ```

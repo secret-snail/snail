@@ -12,6 +12,10 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
 find_package(OpenCV REQUIRED)
 message(STATUS "cv libs: ${OpenCV_LIBS}")
-message(STATUS "include_path: ${OpenCV_INCLUDE_DIRS}")
+message(STATUS "cv includes: ${OpenCV_INCLUDE_DIRS}")
+
+find_package(VISP REQUIRED)
+message(STATUS "visp libs: ${VISP_INCLUDE_DIRS}")
+message(STATUS "visp includes: ${VISP_LIBRARIES}")
 
 add_subdirectory(src/)
