@@ -1,0 +1,7 @@
+To compile:
+
+g++ -o motorTest snail_motor_test.cpp snail_motor.cpp -lpigpio -lrt
+
+To run:
+
+sudo ./motorTest
