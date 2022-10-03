@@ -97,28 +97,17 @@ void recvFloatBlock(emp::NetIO* aliceio, emp::NetIO* bobio, float* f) {
     *f = *fp;
 }
 
-bool estimatePoseCharucoBoard_Secure(cv::InputArray _charucoCorners, cv::InputArray _charucoIds,
-                              const cv::Ptr<cv::aruco::CharucoBoard> &_board, cv::InputArray _cameraMatrix, cv::InputArray _distCoeffs,
-                              cv::InputOutputArray _rvec, cv::InputOutputArray _tvec, bool useExtrinsicGuess,
-                              emp::NetIO *aliceio, emp::NetIO *bobio) {
-    CV_Assert((_charucoCorners.getMat().total() == _charucoIds.getMat().total()));
+bool estimatePoseSecure(std::vector<cv::Point3f> &objPoints, std::vector<cv::Point2f> &imPoints,
+                        cv::InputArray _cameraMatrix, cv::InputArray _distCoeffs,
+                        cv::InputOutputArray _rvec, cv::InputOutputArray _tvec, bool useExtrinsicGuess,
+                        emp::NetIO *aliceio, emp::NetIO *bobio) {
 
-    // need, at least, 4 corners
-    if(_charucoIds.getMat().total() < 4) return false;
-
-    std::vector< cv::Point3f > objPoints;
-    objPoints.reserve(_charucoIds.getMat().total());
-    for(unsigned int i = 0; i < _charucoIds.getMat().total(); i++) {
-        int currId = _charucoIds.getMat().at< int >(i);
-        CV_Assert(currId >= 0 && currId < (int)_board->chessboardCorners.size());
-        objPoints.push_back(_board->chessboardCorners[currId]);
-    }
 
     // points need to be in different lines, check if detected points are enough
     if(!arePointsEnoughForPoseEstimation(objPoints)) return false;
 
     // the cleartext solution
-    //solvePnP(objPoints, _charucoCorners, _cameraMatrix, _distCoeffs, _rvec, _tvec, useExtrinsicGuess);
+    //solvePnP(objPoints, imPoints, _cameraMatrix, _distCoeffs, _rvec, _tvec, useExtrinsicGuess);
 
     uint32_t numPts = objPoints.size();
 
@@ -152,8 +141,8 @@ bool estimatePoseCharucoBoard_Secure(cv::InputArray _charucoCorners, cv::InputAr
         sendFloatBlock(aliceio, objPoints[i].z);
         //sendFloatBlock(aliceio, 1.0f); // fix homog coords div by zero
 
-        sendFloatBlock(aliceio, _board->chessboardCorners[i].x);
-        sendFloatBlock(aliceio, _board->chessboardCorners[i].y);
+        sendFloatBlock(aliceio, imPoints[i].x);
+        sendFloatBlock(aliceio, imPoints[i].y);
     }
     sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,0));
     sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,2));

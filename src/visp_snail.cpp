@@ -4,10 +4,28 @@
 #include <visp3/detection/vpDetectorAprilTag.h>
 #include <visp3/gui/vpDisplayX.h>
 #include <visp3/io/vpImageIo.h>
-#include <visp3/robot/vpUnicycle.h>
 #include <visp3/sensor/vpV4l2Grabber.h>
 #include <visp3/visual_features/vpFeaturePoint3D.h>
 #include <visp3/vs/vpServo.h>
+
+#include <emp_client.h>
+
+#include <emp-tool/io/net_io_channel.h>
+#include <emp-tool/utils/constants.h>
+
+const std::string calibFile="/home/pi/calib.txt";
+#define OFFLOAD_IP "192.168.11.32"
+
+const static constexpr double markerLen = .060; // mm
+
+static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
+    cv::FileStorage fs(filename, cv::FileStorage::READ);
+    if (!fs.isOpened())
+        return false;
+    fs["camera_matrix"] >> camMatrix;
+    fs["distortion_coefficients"] >> distCoeffs;
+    return true;
+}
 
 int main(int argc, const char **argv)
 {
@@ -24,6 +42,7 @@ int main(int argc, const char **argv)
   bool display_on = false;
   bool serial_off = false;
   bool save_image = false; // Only possible if display_on = true
+  bool secure = false;
 
   for (int i = 1; i < argc; i++) {
     if (std::string(argv[i]) == "--tag_size" && i + 1 < argc) {
@@ -50,6 +69,8 @@ int main(int argc, const char **argv)
       serial_off = true;
     } else if (std::string(argv[i]) == "--tag_family" && i + 1 < argc) {
       tagFamily = (vpDetectorAprilTag::vpAprilTagFamily)atoi(argv[i + 1]);
+    } else if (std::string(argv[i]) == "--secure") {
+      secure = true;
     } else if (std::string(argv[i]) == "--help" || std::string(argv[i]) == "-h") {
       std::cout << "Usage: " << argv[0]
                 << " [--input <camera input>] [--tag_size <tag_size in m>]"
@@ -64,21 +85,6 @@ int main(int argc, const char **argv)
       std::cout << " [--serial_off] [--help]" << std::endl;
       return EXIT_SUCCESS;
     }
-  }
-
-  // Me Auriga led ring
-  // if serial com ok: led 1 green
-  // if exception: led 1 red
-  // if tag detected: led 2 green, else led 2 red
-  // if motor left: led 3 blue
-  // if motor right: led 4 blue
-
-  vpSerial *serial = NULL;
-  if (!serial_off) {
-    serial = new vpSerial("/dev/ttyAMA0", 115200);
-
-    serial->write("LED_RING=0,0,0,0\n");  // Switch off all led
-    serial->write("LED_RING=1,0,10,0\n"); // Switch on led 1 to green: serial ok
   }
 
   try {
@@ -122,7 +128,6 @@ int main(int argc, const char **argv)
     else
       lambda.initStandard(4, 0.4, 30); // lambda(0)=4, lambda(oo)=0.4 and lambda'(0)=30
 
-    vpUnicycle robot;
     task.setServo(vpServo::EYEINHAND_L_cVe_eJe);
     task.setInteractionMatrixType(vpServo::CURRENT, vpServo::PSEUDO_INVERSE);
     task.setLambda(lambda);
@@ -146,9 +151,18 @@ int main(int argc, const char **argv)
 
     std::cout << "eJe: \n" << eJe << std::endl;
 
+    cv::Mat cameraMatrix, distCoeffs;
+    bool readOk = readCameraParameters(calibFile, cameraMatrix, distCoeffs);
+    if (!readOk) {
+        std::cerr << "Invalid camera calibration file: " << calibFile << std::endl;
+        return 1;
+    }
+
     // Desired distance to the target
     double Z_d = 0.4;
     double X = 0, Y = 0, Z = Z_d;
+
+    cv::Vec3d s_rvec={0,0,0}, s_tvec={0,0,1};
 
     // Create X_3D visual features
     vpFeaturePoint3D s_XZ, s_XZ_d;
@@ -162,6 +176,17 @@ int main(int argc, const char **argv)
     // Add the features
     task.addFeature(s_XZ, s_XZ_d, vpFeaturePoint3D::selectX() | vpFeaturePoint3D::selectZ());
 
+    emp::NetIO *aliceio;
+    emp::NetIO *bobio;
+    if (secure) {
+      int baseport = 8080;
+      std::cout << "Connecting to alice and bob..." << std::endl;
+      emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
+      emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
+      std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
+          << " bob port: " << baseport+emp::BOB*17 << std::endl;
+    }
+
     std::vector<double> time_vec;
     for (;;) {
       g.acquire(I);
@@ -169,8 +194,45 @@ int main(int argc, const char **argv)
       vpDisplay::display(I);
 
       double t = vpTime::measureTimeMs();
-      std::vector<vpHomogeneousMatrix> cMo_vec;
+      std::vector<vpHomogeneousMatrix> cMo_vec; // JIM: vector of tags, each with 4(?) points
+
+      // calling detect with cam and cMo does pose estimation
       detector.detect(I, tagSize, cam, cMo_vec);
+      auto M = cMo_vec[0];
+      std::cout << "cMo_vec from detect:\n";
+      for (unsigned int i = 0; i < M.getRows(); i++) {
+        for (unsigned int j = 0; j < M.getCols(); j++) {
+          std::cout << M[i][j] << " ";
+        }
+        std::cout << std::endl;
+      }
+      std::cout << std::endl;
+
+      // should be equivalent to detect(I) (just image) then getPose
+      detector.detect(I);
+      vpHomogeneousMatrix cMo_2;
+      if (detector.getNbObjects() == 1) {
+      	bool ret = detector.getPose(0, tagSize, cam, cMo_2);
+	if (!ret) {
+            std::cout << "pose detection failed\n";
+	    continue;
+	}
+        std::cout << "cMo_vec from getPose:\n";
+        for (unsigned int i = 0; i < cMo_2.getRows(); i++) {
+          for (unsigned int j = 0; j < cMo_2.getCols(); j++) {
+            std::cout << cMo_2[i][j] << " ";
+          }
+          std::cout << std::endl;
+        }
+        std::cout << std::endl;
+      }
+
+      // TODO:
+      // first see if detect+getPose returns the same result
+      // then try your own pose estimation and compare result
+      // then swap to priv pres snail
+
+      //std::vector<vpImagePoint> p = detector.getPolygon(i);
 
       t = vpTime::measureTimeMs() - t;
       time_vec.push_back(t);
@@ -182,15 +244,35 @@ int main(int argc, const char **argv)
       }
 
       if (detector.getNbObjects() == 1) {
+	if (secure) {
+	  std::vector<vpImagePoint> p = detector.getPolygon(0);
+
+          std::vector<cv::Point3f> obPoints;
+	  obPoints.push_back({0, 0, 0});
+	  obPoints.push_back({0, markerLen, 0});
+	  obPoints.push_back({markerLen, markerLen, 0});
+	  obPoints.push_back({markerLen, 0, 0});
+
+          std::vector<cv::Point2f> imPoints;
+	  for (int j=0; j<p.size(); ++j) { // should be 4
+            imPoints.push_back({(float)p[j].get_u(), (float)p[j].get_v()});
+	  }
+
+          bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
+			                distCoeffs, s_rvec, s_tvec, true,
+					aliceio, bobio);
+	  if (!res) {
+            std::cout << "pose estimation failed\n";
+	  }
+	}
+
         // Display visual features
         vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
         vpDisplay::displayFrame(I, cMo_vec[0], cam, tagSize / 2, vpColor::none, 3);
         vpDisplay::displayFrame(I, cdMo, cam, tagSize / 3, vpColor::red, 3);
 
-        if (!serial_off) {
-          serial->write("LED_RING=2,0,10,0\n"); // Switch on led 2 to green: tag detected
-        }
-
+	// JIM: why last index 3 here? what are 1 and 2?
+	// is 3 the pose estimate after localization?
         X = cMo_vec[0][0][3];
         Y = cMo_vec[0][1][3];
         Z = cMo_vec[0][2][3];
@@ -214,26 +296,14 @@ int main(int argc, const char **argv)
         double motor_left = (-v[0] - L * v[1]) / radius;
         double motor_right = (v[0] - L * v[1]) / radius;
         std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
-        if (!serial_off) {
-          //          serial->write("LED_RING=3,0,0,10\n"); // Switch on led 3 to blue: motor left servoed
-          //          serial->write("LED_RING=4,0,0,10\n"); // Switch on led 4 to blue: motor right servoed
-        }
         std::stringstream ss;
         double rpm_left = motor_left * 30. / M_PI;
         double rpm_right = motor_right * 30. / M_PI;
         ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
         std::cout << "Send: " << ss.str() << std::endl;
-        if (!serial_off) {
-          serial->write(ss.str());
-        }
       } else {
         // stop the robot
-        if (!serial_off) {
-          serial->write("LED_RING=2,10,0,0\n"); // Switch on led 2 to red: tag not detected
-          //          serial->write("LED_RING=3,0,0,0\n");  // Switch on led 3 to blue: motor left not servoed
-          //          serial->write("LED_RING=4,0,0,0\n");  // Switch on led 4 to blue: motor right not servoed
-          serial->write("MOTOR_RPM=0,-0\n"); // Stop the robot
-        }
+	// TODO
       }
 
       vpDisplay::displayText(I, 20, 20, "Click to quit.", vpColor::red);
@@ -246,10 +316,6 @@ int main(int argc, const char **argv)
         break;
     }
 
-    if (!serial_off) {
-      serial->write("LED_RING=0,0,0,0\n"); // Switch off all led
-    }
-
     std::cout << "Benchmark computation time" << std::endl;
     std::cout << "Mean / Median / Std: " << vpMath::getMean(time_vec) << " ms"
               << " ; " << vpMath::getMedian(time_vec) << " ms"
@@ -257,14 +323,8 @@ int main(int argc, const char **argv)
 
     if (display_on)
       delete d;
-    if (!serial_off) {
-      delete serial;
-    }
   } catch (const vpException &e) {
     std::cerr << "Catch an exception: " << e.getMessage() << std::endl;
-    if (!serial_off) {
-      serial->write("LED_RING=1,10,0,0\n"); // Switch on led 1 to red
-    }
   }
 
   return EXIT_SUCCESS;

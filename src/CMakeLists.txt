@@ -19,13 +19,5 @@ include_directories(PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE
 add_executable(charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp_client} ${emp_src})
 target_link_libraries(charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
 
-add_executable(secure_charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp_client} ${emp_src})
-target_compile_options(secure_charuco_snail PRIVATE "-DSECURE")
-target_link_libraries(secure_charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
-
 add_executable(visp_snail ${CMAKE_CURRENT_SOURCE_DIR}/visp_snail.cpp ${emp_client} ${emp_src})
 target_link_libraries(visp_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
-
-add_executable(secure_visp_snail ${CMAKE_CURRENT_SOURCE_DIR}/visp_snail.cpp ${emp_client} ${emp_src})
-target_compile_options(secure_visp_snail PRIVATE "-DSECURE")
-target_link_libraries(secure_visp_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})

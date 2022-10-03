@@ -18,10 +18,8 @@ const char* keys = "{c        |       | Put value of c=1 to create charuco board
 
 const std::string calibFile="/home/pi/calib.txt";
 #define OFFLOAD_IP "192.168.11.32"
-
-void createBoard();
-void detectCharucoBoardWithCalibrationPose();
-
+const static constexpr double squareLen = .010; // m
+const static constexpr double markerInset = .020; // m
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -234,7 +232,32 @@ void calibrateCharucoBoard() {
     //}
 }
 
-void detectCharucoBoardWithCalibrationPose() {
+bool charucoBoardToPoints(std::vector<std::vector<cv::Point2f> > markerCorners, std::vector<int> markerIds,
+                          std::vector<cv::Point2f> &imPoints, std::vector<cv::Point3f> &objPoints) {
+    CV_Assert((markerCorners.size() == markerIds.size()));
+
+    uint32_t numPts = markerCorners.size();
+
+    // need, at least, 4 corners
+    if(numPts < 4) return false;
+
+    int len = 5-1;
+    int height = 7-1;
+
+    objPoints.reserve(numPts);
+    imPoints.reserve(numPts);
+    for(unsigned int i = 0; i < numPts; i++) {
+        int currId = markerIds[i];
+	float x = ((currId%len) * squareLen) + markerInset;
+	float y = ((currId/len) * squareLen) + markerInset;
+        objPoints.push_back({x, y, 0.0f});
+
+	imPoints.push_back(markerCorners[i][0]); // 0=top left corner
+    }
+    return true;
+}
+
+void detectCharucoBoardWithCalibrationPose(bool secure) {
     cv::VideoCapture inputVideo;
     inputVideo.open(-1); // -1 is autodetect, otherwise set to /dev/video*
 
@@ -247,17 +270,22 @@ void detectCharucoBoardWithCalibrationPose() {
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
     cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(5, 7, 0.08f, 0.04f, dictionary);
     cv::Ptr<cv::aruco::DetectorParameters> params = cv::aruco::DetectorParameters::create();
+    params->cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE; // suggested by docs
 
+    cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
     cv::Vec3d s_rvec={0,0,0}, s_tvec={0,0,1};
 
-#ifdef SECURE
     int baseport = 8080;
-    std::cout << "Connecting to alice and bob..." << std::endl;
-    emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
-    emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
-    std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
-        << " bob port: " << baseport+emp::BOB*17 << std::endl;
-#endif
+    emp::NetIO *aliceio;
+    emp::NetIO *bobio;
+
+    if (secure) {
+      std::cout << "Connecting to alice and bob..." << std::endl;
+      aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
+      bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
+      std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
+                << " bob port: " << baseport+emp::BOB*17 << std::endl;
+    }
 
     while (inputVideo.grab()) {
         cv::Mat image;
@@ -277,21 +305,29 @@ void detectCharucoBoardWithCalibrationPose() {
             if (charucoIds.size() > 0) {
                 cv::Scalar color = cv::Scalar(255, 0, 0);
                 cv::aruco::drawDetectedCornersCharuco(imageCopy, charucoCorners, charucoIds, color);
-#ifdef SECURE
-                cv::Mat undist_corners;
-                cv::undistortPoints(charucoCorners, undist_corners, cameraMatrix, distCoeffs);
-                bool s_valid = estimatePoseCharucoBoard_Secure(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
-#endif
-                cv::Vec3d rvec={0,0,0}, tvec={0,0,1};
+
+		bool s_valid = false;
+		if (secure) {
+                  cv::Mat undist_corners;
+                  cv::undistortPoints(charucoCorners, undist_corners, cameraMatrix, distCoeffs);
+		  std::vector<cv::Point3f> obPoints;
+		  std::vector<cv::Point2f> imPoints;
+
+		  s_valid = charucoBoardToPoints(markerCorners, markerIds, imPoints, obPoints);
+                  s_valid &= estimatePoseSecure(obPoints, imPoints, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
+                  std::cout << "secure pose:\n"
+                      << s_rvec << s_tvec
+                      << std::endl;
+		}
+
                 bool valid = cv::aruco::estimatePoseCharucoBoard(charucoCorners, charucoIds, board, cameraMatrix, distCoeffs, rvec, tvec);
                 std::cout << "plaintext pose:\n"
                     << rvec << tvec
                     << std::endl;
-                // if charuco pose is valid
-                if (valid)
-#ifdef SECURE
+
+                if (s_valid && secure)
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, s_rvec, s_tvec, 0.1f);
-#endif
+		else if (valid)
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);
             }
         }
@@ -310,17 +346,22 @@ int main(int argc, char* argv[])
         parser.printMessage();
         return 0;
     }
+    bool secure = parser.get<bool>("s");
     int choose = parser.get<int>("c");
     switch (choose) {
     case 1:
+        if (secure)
+            std::cout << "Warning: secure flag ignored\n";
         createBoard();
         std::cout << "BoardImg.jpg generated" << std::endl;
         break;
     case 2:
+        if (secure)
+            std::cout << "Warning: secure flag ignored\n";
         calibrateCharucoBoard();
         break;
     case 3:
-        detectCharucoBoardWithCalibrationPose();
+        detectCharucoBoardWithCalibrationPose(secure);
         break;
     default:
         break;
