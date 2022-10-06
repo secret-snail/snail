@@ -10,7 +10,7 @@ After running the first cmake command below, check GTK is ON in command output.
 First install opencv (in home directory)
 ```
 # Install minimal prerequisites (Ubuntu 18.04 as reference)
-sudo apt update && sudo apt install -y cmake g++ wget unzip
+sudo apt update && sudo apt install -y cmake g++ wget unzip libgtk2.0-dev pkg-config
 
 # Download and unpack sources
 wget -O opencv.zip https://github.com/opencv/opencv/archive/4.5.2.zip
@@ -22,7 +22,10 @@ unzip opencv_contrib.zip
 mkdir -p build && cd build
 
 # Configure
-cmake -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib-4.5.2/modules ../opencv-4.5.2
+cmake -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib-4.5.2/modules -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF ../opencv-4.5.2
+
+# Check configuration (WITH_GTK_2_X should be ON)
+cmake -LA | awk '{if(f)print} /-- Cache values/{f=1}' | grep GTK
 
 # Enable swap if on raspberry pi
 sudo mkdir -p /var/cache/swap/

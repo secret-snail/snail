@@ -13,13 +13,14 @@
 
 namespace {
 const char* about = "ChArUco-based snail localization";
-const char* keys = "{c        |       | Put value of c=1 to create charuco board;\nc=2 to run the camera calibrate process;\nc=3 to detect charuco board with camera calibration and Pose Estimation}";
+const char* keys =
+	"{c        |       | Put value of c=1 to create charuco board;\nc=2 to run the camera calibrate process;\nc=3 to detect charuco board with camera calibration and Pose Estimation}"
+	"{s        |       | Run pose estimation in secure mode}"
+	;
 }
 
-const std::string calibFile="/home/pi/calib.txt";
-#define OFFLOAD_IP "192.168.11.32"
-const static constexpr double squareLen = .010; // m
-const static constexpr double markerInset = .020; // m
+const std::string calibFile="/home/pi/snail/calib.txt";
+#define OFFLOAD_IP "68.74.215.161"
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -101,6 +102,11 @@ void calibrateCharucoBoard() {
     while(inputVideo.grab()) {
         cv::Mat image, imageCopy;
         inputVideo.retrieve(image);
+
+        // rotate the image
+        cv::Point2f center((image.cols - 1) / 2.0, (image.rows - 1) / 2.0);
+        cv::Mat rotation_matix = cv::getRotationMatrix2D(center, 180, 1.0);
+        cv::warpAffine(image, image, rotation_matix, image.size());
 
         std::vector< int > ids;
         std::vector< std::vector< cv::Point2f > > corners, rejected;
@@ -233,6 +239,7 @@ void calibrateCharucoBoard() {
 }
 
 bool charucoBoardToPoints(std::vector<std::vector<cv::Point2f> > markerCorners, std::vector<int> markerIds,
+                          cv::Ptr<cv::aruco::CharucoBoard> &board,
                           std::vector<cv::Point2f> &imPoints, std::vector<cv::Point3f> &objPoints) {
     CV_Assert((markerCorners.size() == markerIds.size()));
 
@@ -241,16 +248,11 @@ bool charucoBoardToPoints(std::vector<std::vector<cv::Point2f> > markerCorners, 
     // need, at least, 4 corners
     if(numPts < 4) return false;
 
-    int len = 5-1;
-    int height = 7-1;
-
     objPoints.reserve(numPts);
     imPoints.reserve(numPts);
     for(unsigned int i = 0; i < numPts; i++) {
         int currId = markerIds[i];
-	float x = ((currId%len) * squareLen) + markerInset;
-	float y = ((currId/len) * squareLen) + markerInset;
-        objPoints.push_back({x, y, 0.0f});
+        objPoints.push_back(board->objPoints[currId][0]); // 0 is top left corner
 
 	imPoints.push_back(markerCorners[i][0]); // 0=top left corner
     }
@@ -291,6 +293,12 @@ void detectCharucoBoardWithCalibrationPose(bool secure) {
         cv::Mat image;
         cv::Mat imageCopy;
         inputVideo.retrieve(image);
+
+        // rotate the image
+        cv::Point2f center((image.cols - 1) / 2.0, (image.rows - 1) / 2.0);
+        cv::Mat rotation_matix = cv::getRotationMatrix2D(center, 180, 1.0);
+        cv::warpAffine(image, image, rotation_matix, image.size());
+
         image.copyTo(imageCopy);
         std::vector<int> markerIds;
         std::vector<std::vector<cv::Point2f> > markerCorners;
@@ -313,7 +321,7 @@ void detectCharucoBoardWithCalibrationPose(bool secure) {
 		  std::vector<cv::Point3f> obPoints;
 		  std::vector<cv::Point2f> imPoints;
 
-		  s_valid = charucoBoardToPoints(markerCorners, markerIds, imPoints, obPoints);
+		  s_valid = charucoBoardToPoints(markerCorners, markerIds, board, imPoints, obPoints);
                   s_valid &= estimatePoseSecure(obPoints, imPoints, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
                   std::cout << "secure pose:\n"
                       << s_rvec << s_tvec
@@ -327,7 +335,7 @@ void detectCharucoBoardWithCalibrationPose(bool secure) {
 
                 if (s_valid && secure)
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, s_rvec, s_tvec, 0.1f);
-		else if (valid)
+		else if (valid && !secure)
                     cv::aruco::drawAxis(imageCopy, cameraMatrix, distCoeffs, rvec, tvec, 0.1f);
             }
         }
