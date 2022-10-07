@@ -116,7 +116,7 @@ bool estimatePoseSecure(std::vector<cv::Point3f> &objPoints, std::vector<cv::Poi
     bobio->send_data(&numPts, sizeof(uint32_t));
     aliceio->flush();
     bobio->flush();
-    std::cout << "sent alice and bob numpoints\n";
+    std::cout << "sent alice and bob numpoints="<<numPts<<"\n";
 
     emp::block seed;
     prg.random_block(&seed, 1); // used for alice's inputs only

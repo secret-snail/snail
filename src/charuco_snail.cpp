@@ -316,12 +316,18 @@ void detectCharucoBoardWithCalibrationPose(bool secure) {
 
 		bool s_valid = false;
 		if (secure) {
-                  cv::Mat undist_corners;
-                  cv::undistortPoints(charucoCorners, undist_corners, cameraMatrix, distCoeffs);
+                  //cv::Mat undist_corners;
+                  //cv::undistortPoints(charucoCorners, undist_corners, cameraMatrix, distCoeffs);
 		  std::vector<cv::Point3f> obPoints;
 		  std::vector<cv::Point2f> imPoints;
 
 		  s_valid = charucoBoardToPoints(markerCorners, markerIds, board, imPoints, obPoints);
+	          for (int i=0; i<obPoints.size(); ++i) {
+	            std::cout << "obPonts " << obPoints[i] << '\n';
+	          }
+	          for (int i=0; i<imPoints.size(); ++i) {
+	            std::cout << "imPonts " << imPoints[i] << '\n';
+	          }
                   s_valid &= estimatePoseSecure(obPoints, imPoints, cameraMatrix, distCoeffs, s_rvec, s_tvec, true, aliceio, bobio);
                   std::cout << "secure pose:\n"
                       << s_rvec << s_tvec

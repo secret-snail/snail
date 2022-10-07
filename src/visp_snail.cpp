@@ -1,6 +1,7 @@
 //! \example mbot-apriltag-pbvs.cpp
 #include <visp3/core/vpSerial.h>
 #include <visp3/core/vpXmlParserCamera.h>
+#include <visp3/core/vpImageTools.h>
 #include <visp3/detection/vpDetectorAprilTag.h>
 #include <visp3/gui/vpDisplayX.h>
 #include <visp3/io/vpImageIo.h>
@@ -13,10 +14,8 @@
 #include <emp-tool/io/net_io_channel.h>
 #include <emp-tool/utils/constants.h>
 
-const std::string calibFile="/home/pi/calib.txt";
-#define OFFLOAD_IP "192.168.11.32"
-
-const static constexpr double markerLen = .060; // mm
+const std::string calibFile="/home/pi/snail/calib.txt";
+#define OFFLOAD_IP "68.74.215.161"
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -89,6 +88,7 @@ int main(int argc, const char **argv)
 
   try {
     vpImage<unsigned char> I;
+    vpImage<unsigned char> I2;
 
     vpV4l2Grabber g;
     std::ostringstream device_name;
@@ -96,12 +96,13 @@ int main(int argc, const char **argv)
     g.setDevice(device_name.str());
     g.setScale(1);
     g.acquire(I);
+    g.acquire(I2);
 
     vpDisplay *d = NULL;
     vpImage<vpRGBa> O;
 #ifdef VISP_HAVE_X11
     if (display_on) {
-      d = new vpDisplayX(I);
+      d = new vpDisplayX(I2);
     }
 #endif
 
@@ -151,12 +152,19 @@ int main(int argc, const char **argv)
 
     std::cout << "eJe: \n" << eJe << std::endl;
 
+    // opencv's cameraMatrix does not work here
     cv::Mat cameraMatrix, distCoeffs;
     bool readOk = readCameraParameters(calibFile, cameraMatrix, distCoeffs);
     if (!readOk) {
         std::cerr << "Invalid camera calibration file: " << calibFile << std::endl;
         return 1;
     }
+    //cameraMatrix = cv::Mat::zeros(3, 3, cv::DataType<float>::type);
+    //cameraMatrix.at<float>(0,0) = 615.1674805;
+    //cameraMatrix.at<float>(1,1) = 615.1674805;
+    //cameraMatrix.at<float>(0,2) = (I2.getWidth() / 2.);
+    //cameraMatrix.at<float>(1,2) = (I2.getHeight() / 2.);
+    //cameraMatrix.at<float>(2,2) = 1.0f;
 
     // Desired distance to the target
     double Z_d = 0.4;
@@ -181,8 +189,8 @@ int main(int argc, const char **argv)
     if (secure) {
       int baseport = 8080;
       std::cout << "Connecting to alice and bob..." << std::endl;
-      emp::NetIO *aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
-      emp::NetIO *bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
+      aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
+      bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
       std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
           << " bob port: " << baseport+emp::BOB*17 << std::endl;
     }
@@ -191,48 +199,52 @@ int main(int argc, const char **argv)
     for (;;) {
       g.acquire(I);
 
-      vpDisplay::display(I);
+      // rotate image
+      vpMatrix M(2, 3);
+      M.eye();
+      const double theta = vpMath::rad(180);
+      M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = I.getWidth();
+      M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = I.getHeight();
+      //M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = 0;
+      //M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = 0;
+      vpImageTools::warpImage(I, M, I2);
+
+      vpDisplay::display(I2);
 
       double t = vpTime::measureTimeMs();
       std::vector<vpHomogeneousMatrix> cMo_vec; // JIM: vector of tags, each with 4(?) points
 
       // calling detect with cam and cMo does pose estimation
-      detector.detect(I, tagSize, cam, cMo_vec);
-      auto M = cMo_vec[0];
-      std::cout << "cMo_vec from detect:\n";
-      for (unsigned int i = 0; i < M.getRows(); i++) {
-        for (unsigned int j = 0; j < M.getCols(); j++) {
-          std::cout << M[i][j] << " ";
-        }
-        std::cout << std::endl;
-      }
-      std::cout << std::endl;
+      //detector.detect(I2, tagSize, cam, cMo_vec);
+      //std::cout << "cMo_vec from detect:\n";
+      //for (unsigned int i = 0; i < cMo_vec[0].getRows(); i++) {
+      //  for (unsigned int j = 0; j < cMo_vec[0].getCols(); j++) {
+      //    std::cout << cMo_vec[0][i][j] << " ";
+      //  }
+      //  std::cout << std::endl;
+      //}
+      //std::cout << std::endl;
 
-      // should be equivalent to detect(I) (just image) then getPose
-      detector.detect(I);
-      vpHomogeneousMatrix cMo_2;
+      // should be equivalent to detect(I2) (just image) then getPose
+      detector.detect(I2);
+      cMo_vec.push_back({});
       if (detector.getNbObjects() == 1) {
-      	bool ret = detector.getPose(0, tagSize, cam, cMo_2);
+      	bool ret = detector.getPose(0, tagSize, cam, cMo_vec[0]);
 	if (!ret) {
             std::cout << "pose detection failed\n";
 	    continue;
 	}
         std::cout << "cMo_vec from getPose:\n";
-        for (unsigned int i = 0; i < cMo_2.getRows(); i++) {
-          for (unsigned int j = 0; j < cMo_2.getCols(); j++) {
-            std::cout << cMo_2[i][j] << " ";
+        for (unsigned int i = 0; i < cMo_vec[0].getRows(); i++) {
+          for (unsigned int j = 0; j < cMo_vec[0].getCols(); j++) {
+            std::cout << cMo_vec[0][i][j] << " ";
           }
           std::cout << std::endl;
         }
         std::cout << std::endl;
       }
 
-      // TODO:
-      // first see if detect+getPose returns the same result
-      // then try your own pose estimation and compare result
-      // then swap to priv pres snail
-
-      //std::vector<vpImagePoint> p = detector.getPolygon(i);
+      //std::vector<vpImagePoint> p = detector.getPolygon(i); // todo do i need this?
 
       t = vpTime::measureTimeMs() - t;
       time_vec.push_back(t);
@@ -240,36 +252,73 @@ int main(int argc, const char **argv)
       {
         std::stringstream ss;
         ss << "Detection time: " << t << " ms";
-        vpDisplay::displayText(I, 40, 20, ss.str(), vpColor::red);
+        vpDisplay::displayText(I2, 40, 20, ss.str(), vpColor::red);
       }
 
       if (detector.getNbObjects() == 1) {
+        vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 3);
+
 	if (secure) {
 	  std::vector<vpImagePoint> p = detector.getPolygon(0);
 
           std::vector<cv::Point3f> obPoints;
+          static constexpr const float modTagSize = .055;
 	  obPoints.push_back({0, 0, 0});
-	  obPoints.push_back({0, markerLen, 0});
-	  obPoints.push_back({markerLen, markerLen, 0});
-	  obPoints.push_back({markerLen, 0, 0});
+	  obPoints.push_back({modTagSize, 0, 0});
+	  obPoints.push_back({modTagSize, modTagSize, 0});
+	  obPoints.push_back({0, modTagSize, 0});
+	  //obPoints.push_back({modTagSize/2, modTagSize/2, 0}); // fake center point
 
           std::vector<cv::Point2f> imPoints;
+          //float usum=0.0f, vsum=0.0f;
 	  for (int j=0; j<p.size(); ++j) { // should be 4
-            imPoints.push_back({(float)p[j].get_u(), (float)p[j].get_v()});
+            imPoints.push_back({(float)p[j].get_i(), (float)p[j].get_j()}); // TODO should these be i,j vs u,v?
+            //usum+= p[j].get_u();
+            //vsum+= p[j].get_v();
 	  }
+          //imPoints.push_back({usum/4, vsum/4}); // fake center point
 
+	  for (int i=0; i<obPoints.size(); ++i) {
+	    std::cout << "obPonts " << obPoints[i] << '\n';
+	  }
+	  for (int i=0; i<imPoints.size(); ++i) {
+	    std::cout << "imPonts " << imPoints[i] << '\n';
+	  }
+	  std::cout << "cameraMatrix: " << cameraMatrix << '\n';
           bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
 			                distCoeffs, s_rvec, s_tvec, true,
 					aliceio, bobio);
 	  if (!res) {
             std::cout << "pose estimation failed\n";
+            continue;
 	  }
+          std::cout << "secure pose:\n"
+              << s_rvec << s_tvec
+              << std::endl;
+
+          // convert rot vector to visp cmo_vec
+          vpRxyzVector rxyz{s_rvec[0], s_rvec[1], s_rvec[2]};
+          vpRotationMatrix R(rxyz);
+          for (int i=0; i<3; ++i) {
+            for (int j=0; j<3; ++j) {
+              cMo_vec[0][i][j] = R[i][j];
+            }
+            cMo_vec[0][i][3] = s_tvec[i];
+          }
+          std::cout << "cMo_vec from SECURE getPose:\n";
+          for (unsigned int i = 0; i < cMo_vec[0].getRows(); i++) {
+            for (unsigned int j = 0; j < cMo_vec[0].getCols(); j++) {
+              std::cout << cMo_vec[0][i][j] << " ";
+            }
+            std::cout << std::endl;
+          }
+          std::cout << std::endl;
 	}
 
         // Display visual features
         vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
-        vpDisplay::displayFrame(I, cMo_vec[0], cam, tagSize / 2, vpColor::none, 3);
-        vpDisplay::displayFrame(I, cdMo, cam, tagSize / 3, vpColor::red, 3);
+        vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 3);
+        vpDisplay::displayFrame(I2, cdMo, cam, tagSize / 3, vpColor::red, 3);
 
 	// JIM: why last index 3 here? what are 1 and 2?
 	// is 3 the pose estimate after localization?
@@ -282,6 +331,7 @@ int main(int argc, const char **argv)
 
         std::cout << "X: " << X << " Z: " << Z << std::endl;
 
+        std::cout << "updated\n";
         task.set_cVe(cVe);
         task.set_eJe(eJe);
 
@@ -306,13 +356,13 @@ int main(int argc, const char **argv)
 	// TODO
       }
 
-      vpDisplay::displayText(I, 20, 20, "Click to quit.", vpColor::red);
-      vpDisplay::flush(I);
+      vpDisplay::displayText(I2, 20, 20, "Click to quit.", vpColor::red);
+      vpDisplay::flush(I2);
       if (display_on && save_image) {
-        vpDisplay::getImage(I, O);
+        vpDisplay::getImage(I2, O);
         vpImageIo::write(O, "image.png");
       }
-      if (vpDisplay::getClick(I, false))
+      if (vpDisplay::getClick(I2, false))
         break;
     }
 
