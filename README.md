@@ -53,18 +53,6 @@ make
 sudo make install
 ```
 
-Next modify emp library. Need to change `snail/extern/emp-tool/emp-tool/utils/block.h`, the two places where it says
-```
-#elif __aarch64__
-```
-Change to:
-```
-#elif __arm__
-```
-Also need to modify `snail/extern/emp-tool/emp-tool/utils/aes.h` but in this case you want the x86 code on line 106 to run and not the __aarch64__.
-This is because ssetoneon takes care of transforming compiler intrinsics for you as the aarch64 ones don't work (no crypto built into pi g++ compiler.)
-Be sure to also comment out the __attribute__ line
-
 Install emp-tool deps
 ```
 sudo apt install libssl-dev
