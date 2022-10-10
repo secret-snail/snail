@@ -20,4 +20,4 @@ add_executable(charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp
 target_link_libraries(charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
 
 add_executable(visp_snail ${CMAKE_CURRENT_SOURCE_DIR}/visp_snail.cpp ${emp_client} ${emp_src})
-target_link_libraries(visp_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
+target_link_libraries(visp_snail ${OpenCV_LIBS} ${VISP_LIBRARIES} pigpio)

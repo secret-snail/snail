@@ -164,13 +164,13 @@ bool estimatePoseSecure(std::vector<cv::Point3f> &objPoints, std::vector<cv::Poi
         float tmp;
         recvFloatBlock(aliceio, bobio, &tmp);
         _rvec.getMat().at<double>(i) = tmp;
-        std::cout << _rvec.getMat().at<double>(i) << " ";
+        //std::cout << _rvec.getMat().at<double>(i) << " ";
     }
     for (int i=0; i<3; i++) {
         float tmp;
         recvFloatBlock(aliceio, bobio, &tmp);
         _tvec.getMat().at<double>(i) = tmp;
-        std::cout << _tvec.getMat().at<double>(i) << " ";
+        //std::cout << _tvec.getMat().at<double>(i) << " ";
     }
     std::cout << std::endl;
 
