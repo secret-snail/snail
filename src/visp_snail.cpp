@@ -1,4 +1,6 @@
 //! \example mbot-apriltag-pbvs.cpp
+#include <signal.h>
+
 #include <visp3/core/vpSerial.h>
 #include <visp3/core/vpXmlParserCamera.h>
 #include <visp3/core/vpImageTools.h>
@@ -18,7 +20,8 @@
 #include <emp-tool/utils/constants.h>
 
 const std::string calibFile="/home/pi/snail/calib.txt";
-#define OFFLOAD_IP "68.74.215.161"
+//#define OFFLOAD_IP "68.74.215.161"
+#define OFFLOAD_IP "192.168.11.9"
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -37,9 +40,11 @@ static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::M
 
 #define en1 19
 #define en2 13
-static const int kServoScale = 2;
 
-void servo_setup() {
+int servo_setup() {
+  if (gpioInitialise() < 0) {
+    return 1; 
+  }
   gpioSetMode(in1, PI_OUTPUT);
   gpioSetMode(in2, PI_OUTPUT);
   gpioSetMode(in3, PI_OUTPUT);
@@ -47,16 +52,14 @@ void servo_setup() {
   
   gpioSetMode(en1, PI_OUTPUT);
   gpioSetMode(en2, PI_OUTPUT);
+  gpioSetPWMfrequency(en1, 400);
+  gpioSetPWMfrequency(en2, 400);
   gpioPWM(en1, 0);
   gpioPWM(en2, 0);
+  return 0;
 }
 
-void servo_move(int l, int r) {
-  l*= kServoScale;
-  r*= kServoScale;
-  std::clamp(l, 0, 100);
-  std::clamp(r, 0, 100);
-
+void servo_move(float l, float r) {
   if (l > 0) {
     gpioWrite(in1, PI_LOW);
     gpioWrite(in2, PI_HIGH);
@@ -64,8 +67,6 @@ void servo_move(int l, int r) {
     gpioWrite(in1, PI_HIGH);
     gpioWrite(in2, PI_LOW);
   }
-  gpioPWM(en1, l);
-
   if (r > 0) {
     gpioWrite(in3, PI_LOW);
     gpioWrite(in4, PI_HIGH);
@@ -73,7 +74,21 @@ void servo_move(int l, int r) {
     gpioWrite(in3, PI_HIGH);
     gpioWrite(in4, PI_LOW);
   }
+
+  l = abs(l);
+  r = abs(r);
+  float largest = std::max(l,r);
+  if (largest > 10) {
+    l = l/largest*250;
+    r = r/largest*250;
+  } else {
+    l = l*10;
+    r = r*10;
+  }
+  gpioPWM(en1, l);
   gpioPWM(en2, r);
+
+  std::cout << "wrote pwms to " << l << " " << r << "\n";
 }
 
 void servo_stop() {
@@ -83,10 +98,31 @@ void servo_stop() {
    gpioWrite(in4, PI_HIGH);
    gpioPWM(en1, 0);
    gpioPWM(en2, 0);
+   gpioTerminate(); 
 }
+
+bool signal_stop = false;
+int signal_count = 0;
+void signal_callback_handler(int signum) {
+  std::cout << "caught signal, exiting\n";
+  signal_stop = true;
+  signal_count ++;
+  if (signal_count >= 3)
+    exit(1);
+}
+
+//sudo groupadd gpio
+//sudo usermod -a -G gpio pi
+//sudo grep gpio /etc/group
+//sudo chown root.gpio /dev/gpiomem
+//sudo chmod g+rw /dev/gpiomem
 
 int main(int argc, const char **argv)
 {
+  if (servo_setup()) {
+    return 1;
+  }
+
 #if defined(VISP_HAVE_APRILTAG) && defined(VISP_HAVE_V4L2)
   int device = 0;
   vpDetectorAprilTag::vpAprilTagFamily tagFamily = vpDetectorAprilTag::TAG_36h11;
@@ -154,6 +190,7 @@ int main(int argc, const char **argv)
     device_name << "/dev/video" << device;
     g.setDevice(device_name.str());
     g.setScale(1);
+    g.setNBuffers(1);
     g.acquire(I);
     g.acquire(I2);
 
@@ -219,8 +256,13 @@ int main(int argc, const char **argv)
     cameraMatrix.at<double>(1,2) = (I2.getHeight() / 2.);
     cameraMatrix.at<double>(2,2) = 1.0f;
 
+    static constexpr const float kInputConditioningScalar = 2;
+
     // Desired distance to the target
     double Z_d = 0.4;
+    if (secure) {
+      Z_d *= kInputConditioningScalar;
+    }
     double X = 0, Y = 0, Z = Z_d;
 
     cv::Vec3d s_rvec={0,0,0}, s_tvec={0,0,1};
@@ -247,12 +289,20 @@ int main(int argc, const char **argv)
       std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
           << " bob port: " << baseport+emp::BOB*17 << std::endl;
     }
-    
-    servo_setup();
+
+    // override pigpio signal handler
+    signal(SIGINT, signal_callback_handler);  
+
 
     std::vector<double> time_vec;
     for (;;) {
       g.acquire(I);
+      // visp buffers images, clear out the buffer
+      if (secure) {
+        for (int i=0; i<32; ++i) {
+          g.acquire(I);
+	}
+      }
 
       // rotate image
       vpMatrix M(2, 3);
@@ -288,11 +338,11 @@ int main(int argc, const char **argv)
 		  ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
           vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
 
-	//} else {
+	//}
+	if (secure) {
 	  std::vector<vpImagePoint> p = detector.getPolygon(0);
 
           std::vector<cv::Point3f> obPoints;
-          static constexpr const float kInputConditioningScalar = 2;
           static constexpr const float modTagSize = .065*kInputConditioningScalar;
 	  for (auto p : std::initializer_list<std::pair<int,int>>{{-1, -1}, {-1, 1}, {1, 1}, {1, -1}}) {
 	  //for (auto p : std::initializer_list<std::pair<int,int>>{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}) {
@@ -326,21 +376,18 @@ int main(int argc, const char **argv)
 	  cMo_vec[0].buildFrom(pose);
 
           vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2 * kInputConditioningScalar, vpColor::none, 3);
-        //}
-
-        if (display_on) { // TODO move all display stuff here
-          vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
-          vpDisplay::displayFrame(I2, cdMo, cam, tagSize / 3, vpColor::red, 3);
-	}
+        }
 
         t = vpTime::measureTimeMs() - t;
         time_vec.push_back(t);
 
-        if (display_on) {
+        if (display_on) { // TODO move all display stuff here
+          vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
+          vpDisplay::displayFrame(I2, cdMo, cam, tagSize / 3, vpColor::red, 3);
           std::stringstream ss;
           ss << "Detection time: " << t << " ms";
           vpDisplay::displayText(I2, 40, 20, ss.str(), vpColor::red);
-        }
+	}
 
         // Update Point 3D feature
         X = cMo_vec[0][0][3];
@@ -357,8 +404,8 @@ int main(int argc, const char **argv)
 
         task.print();
         double radius = 0.0325;
-        double L = 0.0725;
-        double motor_left = (-v[0] - L * v[1]) / radius;
+        double L = 0.0425;
+        double motor_left = (v[0] + L * v[1]) / radius;
         double motor_right = (v[0] - L * v[1]) / radius;
         std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
         std::stringstream ss;
@@ -367,10 +414,14 @@ int main(int argc, const char **argv)
         ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
         std::cout << "Send: " << ss.str() << std::endl;
 	servo_move(rpm_left, rpm_right);
+	if (secure) {
+	  sleep(1);
+	  servo_move(0,0);
+	}
 
       } else {
         // stop the robot
-	servo_stop();
+	servo_move(0, 0);
       }
 
       vpDisplay::displayText(I2, 20, 20, "Click to quit.", vpColor::red);
@@ -379,7 +430,7 @@ int main(int argc, const char **argv)
         vpDisplay::getImage(I2, O);
         vpImageIo::write(O, "image.png");
       }
-      if (vpDisplay::getClick(I2, false))
+      if (vpDisplay::getClick(I2, false) || signal_stop)
         break;
     }
 
@@ -393,6 +444,8 @@ int main(int argc, const char **argv)
   } catch (const vpException &e) {
     std::cerr << "Catch an exception: " << e.getMessage() << std::endl;
   }
+
+  servo_stop();
 
   return EXIT_SUCCESS;
 #else
