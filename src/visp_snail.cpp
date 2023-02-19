@@ -20,8 +20,10 @@
 #include <emp-tool/utils/constants.h>
 
 const std::string calibFile="/home/pi/snail/calib.txt";
+static constexpr const float kInputConditioningScalar = 2;
+
 //#define OFFLOAD_IP "68.74.215.161"
-#define OFFLOAD_IP "192.168.11.9"
+#define OFFLOAD_IP "192.168.1.3"
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -41,65 +43,8 @@ static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::M
 #define en1 19
 #define en2 13
 
-int servo_setup() {
-  if (gpioInitialise() < 0) {
-    return 1; 
-  }
-  gpioSetMode(in1, PI_OUTPUT);
-  gpioSetMode(in2, PI_OUTPUT);
-  gpioSetMode(in3, PI_OUTPUT);
-  gpioSetMode(in4, PI_OUTPUT);
-  
-  gpioSetMode(en1, PI_OUTPUT);
-  gpioSetMode(en2, PI_OUTPUT);
-  gpioSetPWMfrequency(en1, 400);
-  gpioSetPWMfrequency(en2, 400);
-  gpioPWM(en1, 0);
-  gpioPWM(en2, 0);
-  return 0;
-}
 
-void servo_move(float l, float r) {
-  if (l > 0) {
-    gpioWrite(in1, PI_LOW);
-    gpioWrite(in2, PI_HIGH);
-  } else {
-    gpioWrite(in1, PI_HIGH);
-    gpioWrite(in2, PI_LOW);
-  }
-  if (r > 0) {
-    gpioWrite(in3, PI_LOW);
-    gpioWrite(in4, PI_HIGH);
-  } else {
-    gpioWrite(in3, PI_HIGH);
-    gpioWrite(in4, PI_LOW);
-  }
 
-  l = abs(l);
-  r = abs(r);
-  float largest = std::max(l,r);
-  if (largest > 10) {
-    l = l/largest*250;
-    r = r/largest*250;
-  } else {
-    l = l*10;
-    r = r*10;
-  }
-  gpioPWM(en1, l);
-  gpioPWM(en2, r);
-
-  std::cout << "wrote pwms to " << l << " " << r << "\n";
-}
-
-void servo_stop() {
-   gpioWrite(in1, PI_HIGH);
-   gpioWrite(in2, PI_HIGH);
-   gpioWrite(in3, PI_HIGH);
-   gpioWrite(in4, PI_HIGH);
-   gpioPWM(en1, 0);
-   gpioPWM(en2, 0);
-   gpioTerminate(); 
-}
 
 bool signal_stop = false;
 int signal_count = 0;
@@ -116,6 +61,69 @@ void signal_callback_handler(int signum) {
 //sudo grep gpio /etc/group
 //sudo chown root.gpio /dev/gpiomem
 //sudo chmod g+rw /dev/gpiomem
+
+
+bool localize(vpV4l2Grabber g, vpImage<unsigned char> I, vpImage<unsigned char> I2, vpDetectorAprilTag detector,
+              double *X, double *Y, double *Z) {
+    g.acquire(I);
+
+    // rotate image   //TODO:: why?
+    vpMatrix M(2, 3);
+    M.eye();
+    const double theta = vpMath::rad(180);
+    M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = I.getWidth();
+    M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = I.getHeight();
+    //M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = 0;
+    //M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = 0;
+    vpImageTools::warpImage(I, M, I2);
+
+    vpDisplay::display(I2);
+
+    double t = vpTime::measureTimeMs();
+    std::vector<vpHomogeneousMatrix> cMo_vec;
+
+    // calling detect with cam and cMo does pose estimation
+    //detector.detect(I2, tagSize, cam, cMo_vec);
+    //std::cout << "cMo_vec from detect:\n" << cMo_vec[0] << '\n';
+
+    // should be equivalent to detect(I2) (just image) then getPose
+    detector.detect(I2);      //TODO: why split up detection and pose estimation?
+    cMo_vec.push_back({});
+    if (detector.getNbObjects() == 1) {
+        bool ret = detector.getPose(0, tagSize, cam, cMo_vec[0]);
+        if (!ret) {
+            std::cout << "pose detection failed\n";
+            continue;
+        }
+
+        std::cout << "cleartext pose:\n" << cMo_vec[0].getThetaUVector().t() <<
+                  ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
+        vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
+
+        t = vpTime::measureTimeMs() - t;
+        time_vec.push_back(t);
+
+        // Update Point 3D feature
+        *X = cMo_vec[0][0][3];
+        *Y = cMo_vec[0][1][3];
+        *Z = cMo_vec[0][2][3];
+        s_XZ.set_XYZ(*X, *Y, *Z);
+        std::cout << "X: " << *X << " Z: " << *Z << std::endl;
+    } else {
+        std::cout << "No Apriltag detected\n";
+    }
+
+    if (vpDisplay::getClick(I2, false) || signal_stop) {
+        return false;
+    }
+
+    return true;
+}
+
+
+
+
+
 
 int main(int argc, const char **argv)
 {
@@ -192,7 +200,7 @@ int main(int argc, const char **argv)
     g.setScale(1);
     g.setNBuffers(1);
     g.acquire(I);
-    g.acquire(I2);
+    g.acquire(I2);  //TODO:Why I2
 
     vpDisplay *d = NULL;
     vpImage<vpRGBa> O;
@@ -248,7 +256,7 @@ int main(int argc, const char **argv)
 
     std::cout << "eJe: \n" << eJe << std::endl;
 
-    cv::Mat cameraMatrix, distCoeffs;
+    cv::Mat cameraMatrix, distCoeffs;              //TODO: Is this for offloading
     cameraMatrix = cv::Mat::zeros(3, 3, cv::DataType<double>::type);
     cameraMatrix.at<double>(0,0) = 615.1674805;
     cameraMatrix.at<double>(1,1) = 615.1674805;
@@ -256,12 +264,11 @@ int main(int argc, const char **argv)
     cameraMatrix.at<double>(1,2) = (I2.getHeight() / 2.);
     cameraMatrix.at<double>(2,2) = 1.0f;
 
-    static constexpr const float kInputConditioningScalar = 2;
 
     // Desired distance to the target
-    double Z_d = 0.4;
+    double Z_d = 0.25;  //TODO: can we reduce?
     if (secure) {
-      Z_d *= kInputConditioningScalar;
+      Z_d *= kInputConditioningScalar;  //TODO: whats this scalar?
     }
     double X = 0, Y = 0, Z = Z_d;
 
@@ -296,142 +303,9 @@ int main(int argc, const char **argv)
 
     std::vector<double> time_vec;
     for (;;) {
-      g.acquire(I);
-      // visp buffers images, clear out the buffer
-      if (secure) {
-        for (int i=0; i<32; ++i) {
-          g.acquire(I);
-	}
-      }
-
-      // rotate image
-      vpMatrix M(2, 3);
-      M.eye();
-      const double theta = vpMath::rad(180);
-      M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = I.getWidth();
-      M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = I.getHeight();
-      //M[0][0] = cos(theta);   M[0][1] = -sin(theta);   M[0][2] = 0;
-      //M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = 0;
-      vpImageTools::warpImage(I, M, I2);
-
-      vpDisplay::display(I2);
-
-      double t = vpTime::measureTimeMs();
-      std::vector<vpHomogeneousMatrix> cMo_vec;
-
-      // calling detect with cam and cMo does pose estimation
-      //detector.detect(I2, tagSize, cam, cMo_vec);
-      //std::cout << "cMo_vec from detect:\n" << cMo_vec[0] << '\n';
-
-      // should be equivalent to detect(I2) (just image) then getPose
-      detector.detect(I2);
-      cMo_vec.push_back({});
-      if (detector.getNbObjects() == 1) {
-	//if (!secure) {
-      	  bool ret = detector.getPose(0, tagSize, cam, cMo_vec[0]);
-	  if (!ret) {
-              std::cout << "pose detection failed\n";
-	      continue;
-	  }
-          //std::cout << "cMo_vec from cleartext getPose:\n" << cMo_vec[0] << '\n';
-          std::cout << "cleartext pose:\n" << cMo_vec[0].getThetaUVector().t() <<
-		  ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
-          vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
-
-	//}
-	if (secure) {
-	  std::vector<vpImagePoint> p = detector.getPolygon(0);
-
-          std::vector<cv::Point3f> obPoints;
-          static constexpr const float modTagSize = .065*kInputConditioningScalar;
-	  for (auto p : std::initializer_list<std::pair<int,int>>{{-1, -1}, {-1, 1}, {1, 1}, {1, -1}}) {
-	  //for (auto p : std::initializer_list<std::pair<int,int>>{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}) {
-	  //for (auto p : std::initializer_list<std::pair<int,int>>{{1, 1}, {-1, 1}, {-1, -1}, {1, -1}}) {
-	    obPoints.push_back({modTagSize/2*p.first, modTagSize/2*p.second, 0});
-          }
-
-          std::vector<cv::Point2f> imPoints;
-	  for (int j=0; j<p.size(); ++j) { // should be 4
-            imPoints.push_back({(float)p[j].get_u(), (float)p[j].get_v()});
-	  }
-
-	  //for (int i=0; i<obPoints.size(); ++i) {
-	  //  std::cout << "obPonts " << obPoints[i] << '\n';
-	  //}
-	  //for (int i=0; i<imPoints.size(); ++i) {
-	  //  std::cout << "imPonts " << imPoints[i] << '\n';
-	  //}
-	  //std::cout << "cameraMatrix: " << cameraMatrix << '\n';
-          bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
-			                distCoeffs, s_rvec, s_tvec, true,
-					aliceio, bobio);
-	  if (!res) {
-            std::cout << "pose estimation failed\n";
-            continue;
-	  }
-          std::cout << "secure pose:\n" << s_rvec << s_tvec << std::endl;
-
-          // convert to visp cmo_vec
-	  vpPoseVector pose {s_tvec[0], s_tvec[1], s_tvec[2], s_rvec[0], s_rvec[1], s_rvec[2]};
-	  cMo_vec[0].buildFrom(pose);
-
-          vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2 * kInputConditioningScalar, vpColor::none, 3);
+        if (!localize(&X, &Y, &Z)) {
+            break;
         }
-
-        t = vpTime::measureTimeMs() - t;
-        time_vec.push_back(t);
-
-        if (display_on) { // TODO move all display stuff here
-          vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
-          vpDisplay::displayFrame(I2, cdMo, cam, tagSize / 3, vpColor::red, 3);
-          std::stringstream ss;
-          ss << "Detection time: " << t << " ms";
-          vpDisplay::displayText(I2, 40, 20, ss.str(), vpColor::red);
-	}
-
-        // Update Point 3D feature
-        X = cMo_vec[0][0][3];
-        Y = cMo_vec[0][1][3];
-        Z = cMo_vec[0][2][3];
-        s_XZ.set_XYZ(X, Y, Z);
-        std::cout << "X: " << X << " Z: " << Z << std::endl;
-
-        // Compute the control law. Velocities are computed in the mobile robot reference frame
-        task.set_cVe(cVe);
-        task.set_eJe(eJe);
-        vpColVector v = task.computeControlLaw();
-        std::cout << "Send velocity to the mbot: " << v[0] << " m/s " << vpMath::deg(v[1]) << " deg/s" << std::endl;
-
-        task.print();
-        double radius = 0.0325;
-        double L = 0.0425;
-        double motor_left = (v[0] + L * v[1]) / radius;
-        double motor_right = (v[0] - L * v[1]) / radius;
-        std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
-        std::stringstream ss;
-        double rpm_left = motor_left * 30. / M_PI;
-        double rpm_right = motor_right * 30. / M_PI;
-        ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
-        std::cout << "Send: " << ss.str() << std::endl;
-	servo_move(rpm_left, rpm_right);
-	if (secure) {
-	  sleep(1);
-	  servo_move(0,0);
-	}
-
-      } else {
-        // stop the robot
-	servo_move(0, 0);
-      }
-
-      vpDisplay::displayText(I2, 20, 20, "Click to quit.", vpColor::red);
-      vpDisplay::flush(I2);
-      if (display_on && save_image) {
-        vpDisplay::getImage(I2, O);
-        vpImageIo::write(O, "image.png");
-      }
-      if (vpDisplay::getClick(I2, false) || signal_stop)
-        break;
     }
 
     std::cout << "Benchmark computation time" << std::endl;
