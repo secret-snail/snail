@@ -21,7 +21,7 @@
 using namespace std;
 
 template<typename T>
-bool lm( vector<cv::Point3_<T>> threeDPts,
+int lm( vector<cv::Point3_<T>> threeDPts,
                     vector<cv::Point_<T>> twoDPts,
                     T _f, T _cx, T _cy,
                     T* _x, /* initial guess for { r1, r2, r3, t1, t2, t3 } */
@@ -318,5 +318,5 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         _x[i] = x[i];
     }
 
-    return i < LM_MAX_ITR;
+    return i;
 }
