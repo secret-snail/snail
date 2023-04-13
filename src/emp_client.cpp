@@ -1,5 +1,7 @@
 #include <emp_client.h>
 
+#include <privacyconf.h>
+
 //#include <emp-tool/io/io_channel.h>
 #include <emp-tool/io/net_io_channel.h>
 #include <emp-tool/utils/block.h>
@@ -111,68 +113,99 @@ bool estimatePoseSecure(std::vector<cv::Point3f> &objPoints, std::vector<cv::Poi
 
     uint32_t numPts = objPoints.size();
 
-    // Setup
-    aliceio->send_data(&numPts, sizeof(uint32_t));
-    bobio->send_data(&numPts, sizeof(uint32_t));
-    aliceio->flush();
-    bobio->flush();
-    std::cout << "sent alice and bob numpoints="<<numPts<<"\n";
+#if PPL_FLOW == PPL_FLOW_SiSL
+    bool done = false;
+    float lambda = LM_LAMBDA_INIT;
+    float err = std::numeric_limits<float>::max();
+    while (!done) {
+#endif
+      std::cout << std::endl;
 
-    emp::block seed;
-    prg.random_block(&seed, 1); // used for alice's inputs only
-    prg.reseed(&seed);
+      // Setup
+      aliceio->send_data(&numPts, sizeof(uint32_t));
+      bobio->send_data(&numPts, sizeof(uint32_t));
+      aliceio->flush();
+      bobio->flush();
+      std::cout << "sent alice and bob numpoints="<<numPts<<"\n";
 
-    aliceio->recv_block(&delta, 1);
-    std::cout << "got delta from alice\n";
-    //p128_hex_u32(delta);
+      emp::block seed;
+      prg.random_block(&seed, 1); // used for alice's inputs only
+      prg.reseed(&seed);
+
+      aliceio->recv_block(&delta, 1);
+      std::cout << "got delta from alice\n";
+      //p128_hex_u32(delta);
 
 
-    // Distribute secret input data via 3-way OT
-    // send prg seed directly to bob so he can generate his own labels
-    bobio->send_block(&seed, 1);
-    bobio->flush();
-    std::cout << "sent bob seed\n";
-    //p128_hex_u32(seed);
+      // Distribute secret input data via 3-way OT
+      // send prg seed directly to bob so he can generate his own labels
+      bobio->send_block(&seed, 1);
+      bobio->flush();
+      std::cout << "sent bob seed\n";
+      //p128_hex_u32(seed);
 
-    // must send all labels ^ gc->delta to alice, she cannot learn seed
-    for(int i=0; i<numPts; i++) {
-        sendFloatBlock(aliceio, objPoints[i].x);
-        sendFloatBlock(aliceio, objPoints[i].y);
-        sendFloatBlock(aliceio, objPoints[i].z);
-        //sendFloatBlock(aliceio, 1.0f); // fix homog coords div by zero
+      // must send all labels ^ gc->delta to alice, she cannot learn seed
+      for(int i=0; i<numPts; i++) {
+          sendFloatBlock(aliceio, objPoints[i].x);
+          sendFloatBlock(aliceio, objPoints[i].y);
+          sendFloatBlock(aliceio, objPoints[i].z);
+          //sendFloatBlock(aliceio, 1.0f); // fix homog coords div by zero
 
-        sendFloatBlock(aliceio, imPoints[i].x);
-        sendFloatBlock(aliceio, imPoints[i].y);
+          sendFloatBlock(aliceio, imPoints[i].x);
+          sendFloatBlock(aliceio, imPoints[i].y);
+      }
+      sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,0));
+      sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,2));
+      sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(1,2));
+      for (int i=0; i<3; i++) {
+          sendFloatBlock(aliceio, _rvec.getMat().at<double>(i));
+      }
+      for (int i=0; i<3; i++) {
+          sendFloatBlock(aliceio, _tvec.getMat().at<double>(i));
+      }
+
+#if PPL_FLOW == PPL_FLOW_SiSL
+      sendFloatBlock(aliceio, lambda);
+#endif
+
+      aliceio->flush();
+      std::cout << "sent alice labels\n";
+
+      // Offload servers run computation...
+      std::cout << "Waiting for computation to finish...\n";
+
+      // Collect result
+      for (int i=0; i<3; i++) {
+          float tmp;
+          recvFloatBlock(aliceio, bobio, &tmp);
+          _rvec.getMat().at<double>(i) = tmp;
+          //std::cout << _rvec.getMat().at<double>(i) << " ";
+      }
+      std::cout << "got rvec, waiting on tvec\n";
+      for (int i=0; i<3; i++) {
+          float tmp;
+          recvFloatBlock(aliceio, bobio, &tmp);
+          _tvec.getMat().at<double>(i) = tmp;
+          //std::cout << _tvec.getMat().at<double>(i) << " ";
+      }
+
+#if PPL_FLOW == PPL_FLOW_SiSL
+      std::cout << "wating on extra err to be returned\n";
+      float newerr;
+      recvFloatBlock(aliceio, bobio, &newerr);
+      if (err < MIN_ER) {
+        done = true;
+      }
+      if( newerr > err ) lambda *= 10;
+      else lambda /= 10;
+      lambda = MIN(lambda, LM_LAMBDA_MAX);
+      lambda = MAX(lambda, LM_LAMBDA_MIN);
+      err = newerr;
+
+      std::cout << "intermediate pose:\n" << _rvec.getMat().t() << _tvec.getMat().t() << '\n';
+      std::cout << "intermediate err:\n" << err << '\n';
     }
-    sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,0));
-    sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(0,2));
-    sendFloatBlock(aliceio, _cameraMatrix.getMat().at<double>(1,2));
-    for (int i=0; i<3; i++) {
-        sendFloatBlock(aliceio, _rvec.getMat().at<double>(i));
-    }
-    for (int i=0; i<3; i++) {
-        sendFloatBlock(aliceio, _tvec.getMat().at<double>(i));
-    }
-    aliceio->flush();
-    std::cout << "sent alice labels\n";
-
-    // Offload servers run computation...
-    std::cout << "Waiting for computation to finish...\n";
-
-    // Collect result
-    for (int i=0; i<3; i++) {
-        float tmp;
-        recvFloatBlock(aliceio, bobio, &tmp);
-        _rvec.getMat().at<double>(i) = tmp;
-        //std::cout << _rvec.getMat().at<double>(i) << " ";
-    }
-    for (int i=0; i<3; i++) {
-        float tmp;
-        recvFloatBlock(aliceio, bobio, &tmp);
-        _tvec.getMat().at<double>(i) = tmp;
-        //std::cout << _tvec.getMat().at<double>(i) << " ";
-    }
-    std::cout << std::endl;
+#endif
 
     return true;
 }

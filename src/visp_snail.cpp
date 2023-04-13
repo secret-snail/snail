@@ -14,6 +14,9 @@
 
 #include <pigpio.h>
 
+#include <jlog.h>
+#include <cleartext-ref/lmlocalization.hpp>
+
 #include <emp_client.h>
 
 #include <emp-tool/io/net_io_channel.h>
@@ -60,6 +63,7 @@ int servo_setup() {
 }
 
 void servo_move(float l, float r) {
+	return;
   if (l > 0) {
     gpioWrite(in1, PI_LOW);
     gpioWrite(in2, PI_HIGH);
@@ -137,6 +141,7 @@ int main(int argc, const char **argv)
   bool serial_off = false;
   bool save_image = false; // Only possible if display_on = true
   bool secure = false;
+  bool visp_plaintext = false;
 
   for (int i = 1; i < argc; i++) {
     if (std::string(argv[i]) == "--tag_size" && i + 1 < argc) {
@@ -165,6 +170,8 @@ int main(int argc, const char **argv)
       tagFamily = (vpDetectorAprilTag::vpAprilTagFamily)atoi(argv[i + 1]);
     } else if (std::string(argv[i]) == "--secure") {
       secure = true;
+    } else if (std::string(argv[i]) == "--visp_plaintext_mode") {
+      visp_plaintext = true;
     } else if (std::string(argv[i]) == "--help" || std::string(argv[i]) == "-h") {
       std::cout << "Usage: " << argv[0]
                 << " [--input <camera input>] [--tag_size <tag_size in m>]"
@@ -179,6 +186,11 @@ int main(int argc, const char **argv)
       std::cout << " [--serial_off] [--help]" << std::endl;
       return EXIT_SUCCESS;
     }
+  }
+
+  if (visp_plaintext && secure) {
+    std::cout << "Cannot use visp plaintext mode and secure mode at same time.\n";
+    return 1;
   }
 
   try {
@@ -202,8 +214,12 @@ int main(int argc, const char **argv)
     }
 #endif
 
+    float focal = 615.1674805;
+    float fcx = (I2.getWidth() / 2.);
+    float fcy = (I2.getWidth() / 2.);
+
     vpCameraParameters cam;
-    cam.initPersProjWithoutDistortion(615.1674805, 615.1675415, I.getWidth() / 2., I.getHeight() / 2.);
+    cam.initPersProjWithoutDistortion(focal, focal, fcx, fcy);
     vpXmlParserCamera parser;
     if (!intrinsic_file.empty() && !camera_name.empty())
       parser.parse(cam, intrinsic_file, camera_name, vpCameraParameters::perspectiveProjWithoutDistortion);
@@ -250,10 +266,10 @@ int main(int argc, const char **argv)
 
     cv::Mat cameraMatrix, distCoeffs;
     cameraMatrix = cv::Mat::zeros(3, 3, cv::DataType<double>::type);
-    cameraMatrix.at<double>(0,0) = 615.1674805;
-    cameraMatrix.at<double>(1,1) = 615.1674805;
-    cameraMatrix.at<double>(0,2) = (I2.getWidth() / 2.);
-    cameraMatrix.at<double>(1,2) = (I2.getHeight() / 2.);
+    cameraMatrix.at<double>(0,0) = focal;
+    cameraMatrix.at<double>(1,1) = focal;
+    cameraMatrix.at<double>(0,2) = fcx;
+    cameraMatrix.at<double>(1,2) = fcy;
     cameraMatrix.at<double>(2,2) = 1.0f;
 
     static constexpr const float kInputConditioningScalar = 2;
@@ -283,11 +299,10 @@ int main(int argc, const char **argv)
     emp::NetIO *bobio;
     if (secure) {
       int baseport = 8080;
-      std::cout << "Connecting to alice and bob..." << std::endl;
+      std::cout << "Connecting to alice port: " << baseport+emp::ALICE*17
+                << " bob port: " << baseport+emp::BOB*17 << std::endl;
       aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
       bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
-      std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
-          << " bob port: " << baseport+emp::BOB*17 << std::endl;
     }
 
     // override pigpio signal handler
@@ -327,8 +342,8 @@ int main(int argc, const char **argv)
       detector.detect(I2);
       cMo_vec.push_back({});
       if (detector.getNbObjects() == 1) {
-	//if (!secure) {
-      	  bool ret = detector.getPose(0, tagSize, cam, cMo_vec[0]);
+	if (visp_plaintext) {
+	  bool ret = detector.getPose(0, tagSize, cam, cMo_vec[0]);
 	  if (!ret) {
               std::cout << "pose detection failed\n";
 	      continue;
@@ -338,8 +353,7 @@ int main(int argc, const char **argv)
 		  ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
           vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
 
-	//}
-	if (secure) {
+	} else {
 	  std::vector<vpImagePoint> p = detector.getPolygon(0);
 
           std::vector<cv::Point3f> obPoints;
@@ -362,9 +376,26 @@ int main(int argc, const char **argv)
 	  //  std::cout << "imPonts " << imPoints[i] << '\n';
 	  //}
 	  //std::cout << "cameraMatrix: " << cameraMatrix << '\n';
-          bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
-			                distCoeffs, s_rvec, s_tvec, true,
-					aliceio, bobio);
+
+	  WALL_CLOCK(LOC_TIME);
+	  WALL_TIC(LOC_TIME);
+	  bool res = false;
+	  if (secure) {
+            res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
+                                          distCoeffs, s_rvec, s_tvec, true,
+                                          aliceio, bobio);
+          } else {
+	    float pose[6];
+            res = lm<float>(obPoints, imPoints,
+	           		focal, fcx, fcy,
+	          		pose);
+	    for (int i=0; i<3; ++i) {
+              s_rvec[i] = pose[i];
+	      s_tvec[i] = pose[i+3];
+	    }
+	  }
+	  WALL_TOC(LOC_TIME);
+
 	  if (!res) {
             std::cout << "pose estimation failed\n";
             continue;
