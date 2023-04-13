@@ -95,6 +95,13 @@ int main(int argc, const char **argv)
   emp::NetIO *aliceio;
   emp::NetIO *bobio;
   if (secure) {
+    std::cout << "Ensure the server side code runs at the same speed as cleartext code.\n"
+	    << "Since the crypto is actually much slower than plaintext,\n"
+            << "it must be emulated with a sleep instead of the servers acutally computing localization.\n";
+
+    std::cout << "\n\nWARNING: Did you modify the server side code with (PPL_FLOW_POWER_TESTING) to sleep instead of compute?\n";
+    sleep(5);
+
     int baseport = 8080;
     std::cout << "Connecting to alice and bob..." << std::endl;
     aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
@@ -107,16 +114,15 @@ int main(int argc, const char **argv)
   signal(SIGINT, signal_callback_handler);  
 
   for (;;) {
+    WALL_CLOCK(power_tester_clock);
+    WALL_TIC(power_tester_clock);
     if (secure) {
       cout << "testing lm\n";
       cv::Mat rvec = cv::Mat::zeros(3,1,cv::DataType<float>::type);
       cv::Mat tvec = cv::Mat::zeros(3,1,cv::DataType<float>::type);
-      CLOCK(secure);
-      TIC(secure);
       bool res = estimatePoseSecure(objectPoints, imagePoints, cameraMatrix,
             	                distCoeffs, rvec, tvec, true,
             			aliceio, bobio);
-      TOC(secure);
       std::cout << "secure pose:\n";
       std::cout << rvec << '\n';
       std::cout << tvec << '\n';
@@ -137,16 +143,14 @@ int main(int argc, const char **argv)
     } else {
       cout << "testing lm\n";
       float rt[6] = {0, 0, 0, 0, 0, 0}; // initial guess
-      CLOCK(cleartext);
-      TIC(cleartext);
       lm<float>(objectPoints, imagePoints, f, cx, cy, rt);
-      TOC(cleartext);
       cv::Mat rvec = cv::Mat(3,1,cv::DataType<float>::type,rt);
       cv::Mat tvec = cv::Mat(3,1,cv::DataType<float>::type,&rt[3]);
       std::cout << "cleartext pose:\n";
       std::cout << rvec << '\n';
       std::cout << tvec << '\n';
     }
+    WALL_TOC(power_tester_clock);
   }
 
   return EXIT_SUCCESS;

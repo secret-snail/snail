@@ -193,7 +193,7 @@ bool estimatePoseSecure(std::vector<cv::Point3f> &objPoints, std::vector<cv::Poi
       std::cout << "wating on extra err to be returned\n";
       float newerr;
       recvFloatBlock(aliceio, bobio, &newerr);
-      if (err < MIN_ER) {
+      if (err <= MIN_ER) {
         done = true;
       }
       if( newerr > err ) lambda *= 10;
