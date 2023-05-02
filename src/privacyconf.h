@@ -16,7 +16,8 @@ const int GN_MAX_ITR=30;
 
 //const float JACOB_EPSILON=1e-5; //hoff's points
 //const float JACOB_EPSILON=0x0.00005fp0; //or 0x0.000040p0 for ETH3D dataset
-const float JACOB_EPSILON=0x0.000007p0; // works with charuco snail
+const float JACOB_EPSILON=0x0.000015fp0; //or 0x0.000040p0 for ETH3D dataset
+//const float JACOB_EPSILON=0x0.000007p0; // works with charuco snail
 const float MIN_ER=1e-2; // pose L2 norm changed by less than this considered converged (charuco snail)
 const float GT_MIN_ER=1; // (pose - ground truth) L2 norm less than this considered correct
 

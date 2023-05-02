@@ -16,11 +16,11 @@ set(emp_src
 
 include_directories(PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../extern/emp-tool/")
 
-add_executable(charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp_client} ${emp_src})
-target_link_libraries(charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
+#add_executable(charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp_client} ${emp_src})
+#target_link_libraries(charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
 
 add_executable(visp_snail ${CMAKE_CURRENT_SOURCE_DIR}/visp_snail.cpp ${emp_client} ${emp_src})
 target_link_libraries(visp_snail ${OpenCV_LIBS} ${VISP_LIBRARIES} pigpio)
 
-add_executable(power_test ${CMAKE_CURRENT_SOURCE_DIR}/power_test.cpp ${emp_client} ${emp_src})
-target_link_libraries(power_test ${OpenCV_LIBS})
+#add_executable(power_test ${CMAKE_CURRENT_SOURCE_DIR}/power_test.cpp ${emp_client} ${emp_src})
+#target_link_libraries(power_test ${OpenCV_LIBS})

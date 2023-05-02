@@ -178,28 +178,61 @@ bool gaussNewton( vector<cv::Point3_<T>> threeDPts,
         //cv::Mat jacobI;
         //invert(jacob, jacobI, cv::DECOMP_SVD);
 
-        // Compute SVD directly with type T
-        myinvert<T>(jacob, 2*n, 6, jacobI);
+
+        //// Compute SVD directly with type T
+        //if (myinvert<T>(jacob, 2*n, 6, jacobI)) {
+        //  for (int p=0; p<2*n; p++) {
+        //      delete[] jacob[p];
+        //  }
+        //  delete[] jacob;
+        //  for (int p=0; p<6; p++) {
+        //      delete[] jacobI[p];
+        //  }
+        //  delete[] jacobI;
+        //  return false;
+        //}
+
 
         // Force compute SVD with floats
-        //// Convert to floats
-        //float **f_jacob = new float*[2*n]; // 2nx6
-        //for(int p=0; p<2*n; p++) {
-        //    f_jacob[p] = new float[6];
-        //    for(int pp=0; pp<6; pp++) {
-        //        f_jacob[p][pp] = jacob[p][pp];
-        //    }
-        //}
-        //float **f_jacobI = new float*[6]; // 6x2n
-        //for(int p=0; p<6; p++)
-        //    f_jacobI[p] = new float[2*n];
-        //myinvert<float>(f_jacob, 2*n, 6, f_jacobI);
-        //// Convert back to T template type
-        //for(int p=0; p<6; p++) {
-        //    for(int pp=0; pp<2*n; pp++) {
-        //        jacobI[p][pp] = f_jacobI[p][pp];
-        //    }
-        //}
+        // Convert to floats
+        float **f_jacob = new float*[2*n]; // 2nx6
+        for(int p=0; p<2*n; p++) {
+            f_jacob[p] = new float[6];
+            for(int pp=0; pp<6; pp++) {
+                f_jacob[p][pp] = jacob[p][pp];
+            }
+        }
+        float **f_jacobI = new float*[6]; // 6x2n
+        for(int p=0; p<6; p++)
+            f_jacobI[p] = new float[2*n];
+        if (myinvert<float>(f_jacob, 2*n, 6, f_jacobI)) {
+          for (int p=0; p<2*n; p++) {
+              delete[] jacob[p];
+              delete[] f_jacob[p];
+          }
+          delete[] jacob;
+          delete[] f_jacob;
+          for (int p=0; p<6; p++) {
+              delete[] jacobI[p];
+              delete[] f_jacobI[p];
+          }
+          delete[] jacobI;
+          delete[] f_jacobI;
+          return false;
+        }
+        // Convert back to T template type
+        for(int p=0; p<6; p++) {
+            for(int pp=0; pp<2*n; pp++) {
+                jacobI[p][pp] = f_jacobI[p][pp];
+            }
+        }
+        for(int p=0; p<6; p++)
+            delete[] f_jacobI[p];
+        delete[] f_jacobI;
+        for(int p=0; p<2*n; p++)
+            delete[] f_jacob[p];
+        delete[] f_jacob;
+
 
         //cout << "jacobI" << endl << jacobI << endl;
 

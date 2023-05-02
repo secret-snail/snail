@@ -25,6 +25,7 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
                     vector<cv::Point_<T>> twoDPts,
                     T _f, T _cx, T _cy,
                     T* _x, /* initial guess for { r1, r2, r3, t1, t2, t3 } */
+                    std::ofstream& csv_file,
                     string logprint="") {
 
     if (typeid(T) == typeid(int) ||
@@ -94,11 +95,11 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         y0[(p*2)+1] = y0Homog[p+n];
     }
 
-    if (_verbosity & DBG_ARGS) {
+    //if (_verbosity & DBG_ARGS) {
         printVector("P", P, 4*n);
         printVector("y0Homog", y0Homog, 3*n);
         printVector("y0", y0, 2*n);
-    }
+    //}
 
     T lambda = lambda_init;
     T prevErrNorm = std::numeric_limits<T>::max();
@@ -175,11 +176,8 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         if (_verbosity & DBG_ER)
             printVector("dy", dy, 2*n);
 
-
-
         // LM with fletcher improvement
         // inv(Jt*J + lambda*diag(Jt*J)) * Jt * dy
-
         T **JtJ = new T*[6]; // 6x6
         for(int p=0; p<6; p++)
             JtJ[p] = new T[6];
@@ -208,11 +206,25 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         //cv::Mat JtJ_i = cv::Mat(6, 6, cv::DataType<T>::type);
         //invert(JtJ, JtJ_i);
 
-        // Compute SVD with type T
-        myinvert<T>(JtJ, 6, 6, JtJ_i);
 
-        //// Compute SVD with floats
-        //// Convert to floats
+        // Compute SVD with type T
+        if (myinvert<T>(JtJ, 6, 6, JtJ_i, csv_file)) {
+          for (int p=0; p<2*n; p++)
+              delete[] jacob[p];
+          delete[] jacob;
+          for (int p=0; p<6; p++) {
+              delete[] JtJ[p];
+          }
+          delete[] JtJ;
+          for (int p=0; p<6; p++)
+              delete[] JtJ_i[p];
+          delete[] JtJ_i;
+          return -1;
+        }
+
+
+        // Compute SVD with floats
+        // Convert to floats
         //float **f_JtJ = new float*[6]; // 6x6
         //for(int p=0; p<6; p++) {
         //    f_JtJ[p] = new float[6];
@@ -223,13 +235,35 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         //float **f_JtJ_i = new float*[6]; // 6x6
         //for(int p=0; p<6; p++)
         //    f_JtJ_i[p] = new float[6];
-        //myinvert<float>(f_JtJ, 6, 6, f_JtJ_i);
+        //if (myinvert<float>(f_JtJ, 6, 6, f_JtJ_i)) {
+        //  for (int p=0; p<2*n; p++) {
+        //      delete[] jacob[p];
+        //  }
+        //  delete[] jacob;
+        //  for (int p=0; p<6; p++) {
+        //      delete[] JtJ[p];
+        //      delete[] f_JtJ[p];
+        //      delete[] JtJ_i[p];
+        //      delete[] f_JtJ_i[p];
+        //  }
+        //  delete[] JtJ;
+        //  delete[] f_JtJ;
+        //  delete[] JtJ_i;
+        //  delete[] f_JtJ_i;
+        //  return -1;
+        //}
         //// Convert back to T template type
         //for(int p=0; p<6; p++) {
         //    for(int pp=0; pp<6; pp++) {
         //        JtJ_i[p][pp] = f_JtJ_i[p][pp];
         //    }
         //}
+        //for(int p=0; p<6; p++) {
+        //  delete[] f_JtJ[p];
+        //  delete[] f_JtJ_i[p];
+        //}
+        //delete[] f_JtJ;
+        //delete[] f_JtJ_i;
 
 
         for (int p=0; p<6; p++) {
@@ -244,8 +278,8 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
         for(int p=0; p<6; p++)
             JtJ_i_Jt[p] = new T[2*n];
         matmult2DwTranspose<T>(JtJ_i, 6, 6, false,
-                            jacob, n*2, 6, true,
-                            JtJ_i_Jt);
+                               jacob, n*2, 6, true,
+                               JtJ_i_Jt);
         for (int p=0; p<2*n; p++)
             delete[] jacob[p];
         delete[] jacob;
@@ -263,6 +297,10 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
                 JtJ_i_Jt_linear[(p*n*2)+pp] = JtJ_i_Jt[p][pp];
             }
         }
+        for(int p=0; p<6; p++)
+          delete[] JtJ_i_Jt[p];
+        delete[] JtJ_i_Jt;
+
         T dx[6];
         matmult(JtJ_i_Jt_linear, 6, 2*n,
                 dy, 2*n, 1, // column vector
@@ -272,7 +310,8 @@ bool lm( vector<cv::Point3_<T>> threeDPts,
             printVector("dx", dx, 6);
 
 
-        T errNorm = twonormsq(dy, 2*n);
+        //T errNorm = twonormsq(dy, 2*n);
+        T errNorm = twonormsq(dx, 6);
         if (_verbosity & DBG_ER) {
             if (printints) {
                 cout << "errNorm " << *(int*)&errNorm << endl;

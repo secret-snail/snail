@@ -15,8 +15,6 @@
 #include <thread>
 #include <time.h>
 
-#include "cleartext-ref/lmlocalization.hpp"
-
 #include <pigpio.h>
 
 #include <emp_client.h>
@@ -107,7 +105,7 @@ void servo_stop() {
     gpioTerminate();
 }
 
-int localize_freq = 100.0;
+int localize_freq = 1.0;
 
 std::mutex localize_mutex;
 std::mutex stop_localize_mutex;
@@ -117,11 +115,11 @@ bool stop_localize;
 bool signal_stop = false;
 int signal_count = 0;
 void signal_callback_handler(int signum) {
-    std::cout << "caught signal, exiting\n";
-    signal_stop = true;
-    signal_count ++;
-    if (signal_count >= 3)
-        exit(1);
+  std::cout << "caught signal, exiting\n";
+  signal_stop = true;
+  signal_count ++;
+  if (signal_count >= 3)
+    exit(1);
 }
 
 //sudo groupadd gpio
@@ -245,14 +243,14 @@ bool localize() {
 
         emp::NetIO *aliceio;
         emp::NetIO *bobio;
-//        if (secure) {
-//            int baseport = 8080;
-//            std::cout << "Connecting to alice and bob..." << std::endl;
-//            aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
-//            bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
-//            std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
-//                      << " bob port: " << baseport+emp::BOB*17 << std::endl;
-//        }
+        if (secure) {
+            int baseport = 8080;
+            std::cout << "Connecting to alice and bob..." << std::endl;
+            aliceio = new emp::NetIO(OFFLOAD_IP, baseport+emp::ALICE*17);
+            bobio = new emp::NetIO(OFFLOAD_IP, baseport+emp::BOB*17);
+            std::cout << "Connected to alice port: " << baseport+emp::ALICE*17
+                      << " bob port: " << baseport+emp::BOB*17 << std::endl;
+        }
 
         // override pigpio signal handler
         signal(SIGINT, signal_callback_handler);
@@ -260,16 +258,12 @@ bool localize() {
 
         std::vector<double> time_vec;
 
-	std::ofstream csv_file;
-	csv_file.open("LM_SVD.csv");
-	csv_file << "LM, SVD,\n";
-
         while(!stop_localize) {
             localize_mutex.try_lock();
             localize_mutex.lock();
 
             g.acquire(I);
-
+            // visp buffers images, clear out the buffer
             if (secure) {
                 for (int i=0; i<32; ++i) {
                     g.acquire(I);
@@ -308,6 +302,7 @@ bool localize() {
                 //std::cout << "cMo_vec from cleartext getPose:\n" << cMo_vec[0] << '\n';
                 std::cout << "cleartext pose:\n" << cMo_vec[0].getThetaUVector().t() <<
                           ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
+                vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
 
                 //}
                 if (secure) {
@@ -333,40 +328,20 @@ bool localize() {
                     //  std::cout << "imPonts " << imPoints[i] << '\n';
                     //}
                     //std::cout << "cameraMatrix: " << cameraMatrix << '\n';
-
-
-                    float _x[] = {0, 0, 0, 0, 0, 1};
-
-                    std::cout << "\n\n\nbefore" << _x[3] << " " << _x[4] << " "<< _x[5] << " " <<_x[0] << " "<< _x[1] << " "<< _x[2]<< "\n\n\n";
-		  
-		    
-		    std::clock_t start_time = std::clock();
-		   
-                    bool res = lm(obPoints, imPoints, (float)cameraMatrix.at<double>(0,0),
-                       (float)cameraMatrix.at<double>(0,2), (float)cameraMatrix.at<double>(1,2), _x, csv_file);
-		    
-		    csv_file << std::clock() - start_time << ", . ,\n";
-
-//                    bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
-//                                                  distCoeffs, s_rvec, s_tvec, true,
-//                                                  aliceio, bobio);
-//                    if (!res) {
-//                        std::cout << "pose estimation failed\n";
-//                        continue;
-//                    }
-                    std::cout << "\n\n\nafter" << _x[3] << " " << _x[4] << " "<< _x[5] << " " <<_x[0] << " "<< _x[1] << " "<< _x[2] << "\n\n\n";
-                    s_rvec[0] = _x[0];
-                    s_rvec[1] = _x[1];
-                    s_rvec[2] = _x[2];
-                    s_tvec[0] = _x[3];
-                    s_tvec[1] = _x[4];
-                    s_tvec[2] = _x[5];
-
+                    bool res = estimatePoseSecure(obPoints, imPoints, cameraMatrix,
+                                                  distCoeffs, s_rvec, s_tvec, true,
+                                                  aliceio, bobio);
+                    if (!res) {
+                        std::cout << "pose estimation failed\n";
+                        continue;
+                    }
                     std::cout << "secure pose:\n" << s_rvec << s_tvec << std::endl;
 
                     // convert to visp cmo_vec
                     vpPoseVector pose {s_tvec[0], s_tvec[1], s_tvec[2], s_rvec[0], s_rvec[1], s_rvec[2]};
                     cMo_vec[0].buildFrom(pose);
+
+                    vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2 * kInputConditioningScalar, vpColor::none, 3);
                 }
 
                 t = vpTime::measureTimeMs() - t;
@@ -391,24 +366,24 @@ bool localize() {
                 task.set_cVe(cVe);
                 task.set_eJe(eJe);
                 vpColVector v = task.computeControlLaw();
-//                std::cout << "Send velocity to the mbot: " << v[0] << " m/s " << vpMath::deg(v[1]) << " deg/s" << std::endl;
+                std::cout << "Send velocity to the mbot: " << v[0] << " m/s " << vpMath::deg(v[1]) << " deg/s" << std::endl;
 
                 task.print();
                 double radius = 0.0325;
                 double L = 0.0425;
                 double motor_left = (v[0] + L * v[1]) / radius;
                 double motor_right = (v[0] - L * v[1]) / radius;
-//                std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
+                std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
                 std::stringstream ss;
                 double rpm_left = motor_left * 30. / M_PI;
                 double rpm_right = motor_right * 30. / M_PI;
-//                ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
-//                std::cout << "Send: " << ss.str() << std::endl;
+                ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
+                std::cout << "Send: " << ss.str() << std::endl;
                 servo_move(rpm_left, rpm_right);
-//                if (secure) {
-//                    sleep(1);
-//                    servo_move(0,0);
-//                }
+                if (secure) {
+                    sleep(1);
+                    servo_move(0,0);
+                }
 
             } else {
                 // stop the robot
@@ -422,8 +397,7 @@ bool localize() {
                 break;
             }
         }
-        
-        csv_file.close();
+
         std::cout << "Benchmark computation time" << std::endl;
         std::cout << "Mean / Median / Std: " << vpMath::getMean(time_vec) << " ms"
                   << " ; " << vpMath::getMedian(time_vec) << " ms"
@@ -447,7 +421,7 @@ int main(int argc, const char **argv)
 
 #if defined(VISP_HAVE_APRILTAG) && defined(VISP_HAVE_V4L2)
 
-    for (int i = 1; i < argc; i++) {
+  for (int i = 1; i < argc; i++) {
     if (std::string(argv[i]) == "--tag_size" && i + 1 < argc) {
       tagSize = std::atof(argv[i + 1]);
     } else if (std::string(argv[i]) == "--input" && i + 1 < argc) {
@@ -501,15 +475,15 @@ int main(int argc, const char **argv)
 
   return EXIT_SUCCESS;
 #else
-    (void)argc;
-    (void)argv;
+  (void)argc;
+  (void)argv;
 #ifndef VISP_HAVE_APRILTAG
-    std::cout << "ViSP is not build with Apriltag support" << std::endl;
+  std::cout << "ViSP is not build with Apriltag support" << std::endl;
 #endif
 #ifndef VISP_HAVE_V4L2
-    std::cout << "ViSP is not build with v4l2 support" << std::endl;
+  std::cout << "ViSP is not build with v4l2 support" << std::endl;
 #endif
-    std::cout << "Install missing 3rd parties, configure and build ViSP to run this tutorial" << std::endl;
-    return EXIT_SUCCESS;
+  std::cout << "Install missing 3rd parties, configure and build ViSP to run this tutorial" << std::endl;
+  return EXIT_SUCCESS;
 #endif
 }

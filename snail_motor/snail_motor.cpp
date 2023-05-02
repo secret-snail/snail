@@ -10,7 +10,9 @@ void setup() {
    gpioSetMode(en1, PI_OUTPUT);
    gpioSetMode(en2, PI_OUTPUT);
    
-   gpioPWM(en1, 175);
+   gpioSetPWMfrequency(en1, 400);
+   gpioSetPWMfrequency(en2, 400);
+   gpioPWM(en1, 255);
    gpioPWM(en2, 255);
 }
 
@@ -52,7 +54,7 @@ void slow() {
 }
 
 void fast() {
-   gpioPWM(en1, 175);
+   gpioPWM(en1, 255);
    gpioPWM(en2, 255);
 }
 
