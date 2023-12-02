@@ -16,6 +16,8 @@ set(emp_src
 
 include_directories(PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../extern/emp-tool/")
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+
 add_executable(charuco_snail ${CMAKE_CURRENT_SOURCE_DIR}/charuco_snail.cpp ${emp_client} ${emp_src})
 target_link_libraries(charuco_snail ${OpenCV_LIBS} ${VISP_LIBRARIES})
 

@@ -1,5 +1,8 @@
 //! \example mbot-apriltag-pbvs.cpp
 #include <signal.h>
+#include <chrono>
+#include <thread>
+#include <mutex>
 
 #include <visp3/core/vpSerial.h>
 #include <visp3/core/vpXmlParserCamera.h>
@@ -22,6 +25,10 @@
 const std::string calibFile="/home/pi/snail/calib.txt";
 //#define OFFLOAD_IP "68.74.215.161"
 #define OFFLOAD_IP "192.168.11.9"
+
+static constexpr const float kInputConditioningScalar = 2.f;
+static const constexpr double Z_d = 0.4f; // Desired distance to the target
+
 
 static bool readCameraParameters(std::string filename, cv::Mat& camMatrix, cv::Mat& distCoeffs) {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
@@ -116,6 +123,115 @@ void signal_callback_handler(int signum) {
 //sudo grep gpio /etc/group
 //sudo chown root.gpio /dev/gpiomem
 //sudo chmod g+rw /dev/gpiomem
+
+std::mutex pose_mutex;  // protects shared global vars below
+std::chrono::steady_clock::time_point last_updated;
+double X = 0, Y = 0, Z = Z_d;
+
+void control_loop(bool secure, bool display_on) {
+  double target_Z = Z_d * (secure ? kInputConditioningScalar : 1);
+
+  vpServo task;
+  vpAdaptiveGain lambda;
+  if (display_on)
+    lambda.initStandard(2.5, 0.4, 30); // lambda(0)=2.5, lambda(oo)=0.4 and lambda'(0)=30
+  else
+    lambda.initStandard(1, 0.1, 10); // lambda(0)=4, lambda(oo)=0.4 and lambda'(0)=30
+    //lambda.initStandard(4, 0.4, 30); // lambda(0)=4, lambda(oo)=0.4 and lambda'(0)=30
+
+  task.setServo(vpServo::EYEINHAND_L_cVe_eJe);
+  task.setInteractionMatrixType(vpServo::CURRENT, vpServo::PSEUDO_INVERSE);
+  task.setLambda(lambda);
+  vpRotationMatrix cRe;
+  cRe[0][0] = 0;
+  cRe[0][1] = -1;
+  cRe[0][2] = 0;
+  cRe[1][0] = 0;
+  cRe[1][1] = 0;
+  cRe[1][2] = -1;
+  cRe[2][0] = 1;
+  cRe[2][1] = 0;
+  cRe[2][2] = 0;
+
+  vpHomogeneousMatrix cMe(vpTranslationVector(), cRe);
+  vpVelocityTwistMatrix cVe(cMe);
+  task.set_cVe(cVe);
+
+  vpMatrix eJe(6, 2, 0);
+  eJe[0][0] = eJe[5][1] = 1.0;
+  task.set_eJe(eJe);
+
+  // Create X_3D visual features for visp task.
+  vpFeaturePoint3D s_XZ, s_XZ_d;
+  s_XZ.buildFrom(0, 0, target_Z);
+  s_XZ_d.buildFrom(0, 0, target_Z);
+  task.addFeature(s_XZ, s_XZ_d, vpFeaturePoint3D::selectX() | vpFeaturePoint3D::selectZ());
+
+  std::chrono::steady_clock::time_point last_read;
+  std::chrono::steady_clock::time_point last_estimated;
+  double estimated_X=0, estimated_Y=0, estimated_Z=0;
+  vpColVector velocity(2);
+
+  while (!signal_stop) {
+    // Read global state.
+    {
+      const std::lock_guard<std::mutex> lock(pose_mutex);
+      if (last_read != last_updated) {
+        // Got a new pose, overwrite our estimates.
+	      std::cout << "Got a new pose, overwrite our estimates.\n";
+        last_estimated = last_updated;
+	last_read = last_updated;
+        estimated_X = X;
+        estimated_Y = Y;
+        estimated_Z = Z;
+      }
+    }
+
+    // Check for staleness i.e. we do not know current pose.
+    auto now = std::chrono::steady_clock::now();
+    auto msSinceRead = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_read).count();
+    if (msSinceRead > 750) { // Very stale global pose, stop moving
+      servo_move(0,0);
+      sleep(0.1);
+      continue;
+    }
+
+    double z_tol = 0.1 * target_Z;
+    if (estimated_Z > target_Z - z_tol && estimated_Z < target_Z + z_tol) { // z close enough
+      servo_move(0,0);
+      sleep(0.1);
+      continue;
+    }
+
+    // Estimate current pose based on prev velocity and time passed.
+    auto usSinceEstimated = std::chrono::duration_cast<std::chrono::microseconds>(now - last_estimated).count();
+    if (usSinceEstimated > 1000) { // Stale estimated pose.
+      //estimated_X += static_cast<double>(velocity[0]) * usSinceEstimated * 1.e-6; // forget about x for now
+      estimated_Z += static_cast<double>(velocity[0]) * usSinceEstimated * 1.e-6;
+      last_estimated = now;
+    }
+
+    // Compute the control law. Velocities are computed in the mobile robot reference frame
+    s_XZ.set_XYZ(estimated_X, estimated_Y, estimated_Z);
+    velocity = task.computeControlLaw();
+    std::cout << "Send velocity to the mbot: " << velocity[0] << " m/s " << vpMath::deg(velocity[1]) << " deg/s" << std::endl;
+    
+    task.print();
+    const static constexpr double radius = 0.0325;
+    const static constexpr double L = 0.155 / 2;
+    //const static constexpr double L = 0.04; // reduce impact of turns, doesn't work well
+    double motor_left = (velocity[0] + (L * velocity[1])) / radius;
+    double motor_right = (velocity[0] - (L * velocity[1])) / radius;
+
+    std::cout << "motor velocity left: " << motor_left << ", right: " << motor_right << '\n';
+    double rpm_left = motor_left * 30. / M_PI;
+    double rpm_right = motor_right * 30. / M_PI;
+    std::cout << "motor rpm left: " << vpMath::round(rpm_left) << ", right: " << vpMath::round(rpm_right) << '\n';
+    servo_move(rpm_left, rpm_right);
+  }
+  servo_move(0,0);
+  servo_stop();
+}
 
 int main(int argc, const char **argv)
 {
@@ -218,36 +334,6 @@ int main(int argc, const char **argv)
     detector.setAprilTagNbThreads(nThreads);
     detector.setDisplayTag(display_tag);
 
-    vpServo task;
-    vpAdaptiveGain lambda;
-    if (display_on)
-      lambda.initStandard(2.5, 0.4, 30); // lambda(0)=2.5, lambda(oo)=0.4 and lambda'(0)=30
-    else
-      lambda.initStandard(4, 0.4, 30); // lambda(0)=4, lambda(oo)=0.4 and lambda'(0)=30
-
-    task.setServo(vpServo::EYEINHAND_L_cVe_eJe);
-    task.setInteractionMatrixType(vpServo::CURRENT, vpServo::PSEUDO_INVERSE);
-    task.setLambda(lambda);
-    vpRotationMatrix cRe;
-    cRe[0][0] = 0;
-    cRe[0][1] = -1;
-    cRe[0][2] = 0;
-    cRe[1][0] = 0;
-    cRe[1][1] = 0;
-    cRe[1][2] = -1;
-    cRe[2][0] = 1;
-    cRe[2][1] = 0;
-    cRe[2][2] = 0;
-
-    vpHomogeneousMatrix cMe(vpTranslationVector(), cRe);
-    vpVelocityTwistMatrix cVe(cMe);
-    task.set_cVe(cVe);
-
-    vpMatrix eJe(6, 2, 0);
-    eJe[0][0] = eJe[5][1] = 1.0;
-
-    std::cout << "eJe: \n" << eJe << std::endl;
-
     cv::Mat cameraMatrix, distCoeffs;
     cameraMatrix = cv::Mat::zeros(3, 3, cv::DataType<double>::type);
     cameraMatrix.at<double>(0,0) = 615.1674805;
@@ -256,28 +342,7 @@ int main(int argc, const char **argv)
     cameraMatrix.at<double>(1,2) = (I2.getHeight() / 2.);
     cameraMatrix.at<double>(2,2) = 1.0f;
 
-    static constexpr const float kInputConditioningScalar = 2;
-
-    // Desired distance to the target
-    double Z_d = 0.4;
-    if (secure) {
-      Z_d *= kInputConditioningScalar;
-    }
-    double X = 0, Y = 0, Z = Z_d;
-
     cv::Vec3d s_rvec={0,0,0}, s_tvec={0,0,1};
-
-    // Create X_3D visual features
-    vpFeaturePoint3D s_XZ, s_XZ_d;
-    s_XZ.buildFrom(0, 0, Z_d);
-    s_XZ_d.buildFrom(0, 0, Z_d);
-
-    // Create Point 3D X, Z coordinates visual features
-    s_XZ.buildFrom(X, Y, Z);
-    s_XZ_d.buildFrom(0, 0, Z_d); // The value of s* is X=Y=0 and Z=Z_d meter
-
-    // Add the features
-    task.addFeature(s_XZ, s_XZ_d, vpFeaturePoint3D::selectX() | vpFeaturePoint3D::selectZ());
 
     emp::NetIO *aliceio;
     emp::NetIO *bobio;
@@ -293,16 +358,17 @@ int main(int argc, const char **argv)
     // override pigpio signal handler
     signal(SIGINT, signal_callback_handler);  
 
+    // start control loop
+    std::thread cl(control_loop, secure, display_on);
 
     std::vector<double> time_vec;
-    for (;;) {
-      g.acquire(I);
+    while (!signal_stop) {
       // visp buffers images, clear out the buffer
-      if (secure) {
-        for (int i=0; i<32; ++i) {
-          g.acquire(I);
-	}
-      }
+      double imageT;
+      do {
+        imageT = vpTime::measureTimeMs();
+      	g.acquire(I);
+      } while (vpTime::measureTimeMs() - imageT < 10);
 
       // rotate image
       vpMatrix M(2, 3);
@@ -314,7 +380,9 @@ int main(int argc, const char **argv)
       //M[1][0] = sin(theta);   M[1][1] = cos(theta);    M[1][2] = 0;
       vpImageTools::warpImage(I, M, I2);
 
-      vpDisplay::display(I2);
+      if (display_on) {
+        vpDisplay::display(I2);
+      }
 
       double t = vpTime::measureTimeMs();
       std::vector<vpHomogeneousMatrix> cMo_vec;
@@ -336,7 +404,9 @@ int main(int argc, const char **argv)
           //std::cout << "cMo_vec from cleartext getPose:\n" << cMo_vec[0] << '\n';
           std::cout << "cleartext pose:\n" << cMo_vec[0].getThetaUVector().t() <<
 		  ' ' << cMo_vec[0].getTranslationVector().t() << '\n';
-          vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
+          if (display_on) {
+            vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2, vpColor::none, 1);
+	  }
 
 	//}
 	if (secure) {
@@ -375,63 +445,43 @@ int main(int argc, const char **argv)
 	  vpPoseVector pose {s_tvec[0], s_tvec[1], s_tvec[2], s_rvec[0], s_rvec[1], s_rvec[2]};
 	  cMo_vec[0].buildFrom(pose);
 
-          vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2 * kInputConditioningScalar, vpColor::none, 3);
+          if (display_on) {
+            vpDisplay::displayFrame(I2, cMo_vec[0], cam, tagSize / 2 * kInputConditioningScalar, vpColor::none, 3);
+	  }
         }
 
         t = vpTime::measureTimeMs() - t;
         time_vec.push_back(t);
 
-        if (display_on) { // TODO move all display stuff here
-          vpHomogeneousMatrix cdMo(0, 0, Z_d, 0, 0, 0);
+        if (display_on) {
+          vpHomogeneousMatrix cdMo(0, 0, Z_d * (secure ? kInputConditioningScalar : 1), 0, 0, 0);
           vpDisplay::displayFrame(I2, cdMo, cam, tagSize / 3, vpColor::red, 3);
           std::stringstream ss;
           ss << "Detection time: " << t << " ms";
           vpDisplay::displayText(I2, 40, 20, ss.str(), vpColor::red);
 	}
 
-        // Update Point 3D feature
-        X = cMo_vec[0][0][3];
-        Y = cMo_vec[0][1][3];
-        Z = cMo_vec[0][2][3];
-        s_XZ.set_XYZ(X, Y, Z);
-        std::cout << "X: " << X << " Z: " << Z << std::endl;
-
-        // Compute the control law. Velocities are computed in the mobile robot reference frame
-        task.set_cVe(cVe);
-        task.set_eJe(eJe);
-        vpColVector v = task.computeControlLaw();
-        std::cout << "Send velocity to the mbot: " << v[0] << " m/s " << vpMath::deg(v[1]) << " deg/s" << std::endl;
-
-        task.print();
-        double radius = 0.0325;
-        double L = 0.0425;
-        double motor_left = (v[0] + L * v[1]) / radius;
-        double motor_right = (v[0] - L * v[1]) / radius;
-        std::cout << "motor left vel: " << motor_left << " motor right vel: " << motor_right << std::endl;
-        std::stringstream ss;
-        double rpm_left = motor_left * 30. / M_PI;
-        double rpm_right = motor_right * 30. / M_PI;
-        ss << "MOTOR_RPM=" << vpMath::round(rpm_left) << "," << vpMath::round(rpm_right) << "\n";
-        std::cout << "Send: " << ss.str() << std::endl;
-	servo_move(rpm_left, rpm_right);
-	if (secure) {
-	  sleep(1);
-	  servo_move(0,0);
+        // Update Point 3D feature for control loop to use later
+        {
+          const std::lock_guard<std::mutex> lock(pose_mutex);
+          X = cMo_vec[0][0][3];
+          Y = cMo_vec[0][1][3];
+          Z = cMo_vec[0][2][3];
+          last_updated = std::chrono::steady_clock::now();
 	}
-
-      } else {
-        // stop the robot
-	servo_move(0, 0);
+        //std::cout << "X: " << X << " Z: " << Z << std::endl;
       }
 
-      vpDisplay::displayText(I2, 20, 20, "Click to quit.", vpColor::red);
-      vpDisplay::flush(I2);
-      if (display_on && save_image) {
-        vpDisplay::getImage(I2, O);
-        vpImageIo::write(O, "image.png");
+      if (display_on) {
+        vpDisplay::displayText(I2, 20, 20, "Click to quit.", vpColor::red);
+        vpDisplay::flush(I2);
+        if (display_on && save_image) {
+          vpDisplay::getImage(I2, O);
+          vpImageIo::write(O, "image.png");
+        }
+        if (vpDisplay::getClick(I2, false))
+          break;
       }
-      if (vpDisplay::getClick(I2, false) || signal_stop)
-        break;
     }
 
     std::cout << "Benchmark computation time" << std::endl;
@@ -439,13 +489,15 @@ int main(int argc, const char **argv)
               << " ; " << vpMath::getMedian(time_vec) << " ms"
               << " ; " << vpMath::getStdev(time_vec) << " ms" << std::endl;
 
+    // Let the control loop finish.
+    cl.join();
+
     if (display_on)
       delete d;
   } catch (const vpException &e) {
     std::cerr << "Catch an exception: " << e.getMessage() << std::endl;
   }
 
-  servo_stop();
 
   return EXIT_SUCCESS;
 #else
