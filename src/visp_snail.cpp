@@ -95,7 +95,7 @@ void servo_move(float l, float r) {
   gpioPWM(en1, l);
   gpioPWM(en2, r);
 
-  std::cout << "wrote pwms to " << l << " " << r << "\n";
+  // std::cout << "wrote pwms to " << l << " " << r << "\n";
 }
 
 void servo_stop() {
@@ -178,9 +178,9 @@ void control_loop(bool secure, bool display_on) {
       const std::lock_guard<std::mutex> lock(pose_mutex);
       if (last_read != last_updated) {
         // Got a new pose, overwrite our estimates.
-	      std::cout << "Got a new pose, overwrite our estimates.\n";
         last_estimated = last_updated;
 	last_read = last_updated;
+	//std::cout << "estimated z-pose vs real " << estimated_Z << " " << Z << '\n';
         estimated_X = X;
         estimated_Y = Y;
         estimated_Z = Z;
@@ -196,8 +196,9 @@ void control_loop(bool secure, bool display_on) {
       continue;
     }
 
+    // Check if the snail has reached the target Z location.
     double z_tol = 0.1 * target_Z;
-    if (estimated_Z > target_Z - z_tol && estimated_Z < target_Z + z_tol) { // z close enough
+    if (estimated_Z > target_Z - z_tol && estimated_Z < target_Z + z_tol) {
       servo_move(0,0);
       sleep(0.1);
       continue;
@@ -207,23 +208,24 @@ void control_loop(bool secure, bool display_on) {
     auto usSinceEstimated = std::chrono::duration_cast<std::chrono::microseconds>(now - last_estimated).count();
     if (usSinceEstimated > 1000) { // Stale estimated pose.
       //estimated_X += static_cast<double>(velocity[0]) * usSinceEstimated * 1.e-6; // forget about x for now
-      estimated_Z += static_cast<double>(velocity[0]) * usSinceEstimated * 1.e-6;
+      estimated_Z -= static_cast<double>(velocity[0]) * usSinceEstimated * 1.e-6;
       last_estimated = now;
     }
 
     // Compute the control law. Velocities are computed in the mobile robot reference frame
     s_XZ.set_XYZ(estimated_X, estimated_Y, estimated_Z);
     velocity = task.computeControlLaw();
-    std::cout << "Send velocity to the mbot: " << velocity[0] << " m/s " << vpMath::deg(velocity[1]) << " deg/s" << std::endl;
-    
-    task.print();
+    // std::cout << "Send velocity to the mbot: " << velocity[0] << " m/s " << vpMath::deg(velocity[1]) << " deg/s" << std::endl;
+    // task.print();
+
     const static constexpr double radius = 0.0325;
-    const static constexpr double L = 0.155 / 2;
+    const static constexpr double L = 0.155;
+    //const static constexpr double L = 0.155 / 2;
     //const static constexpr double L = 0.04; // reduce impact of turns, doesn't work well
     double motor_left = (velocity[0] + (L * velocity[1])) / radius;
     double motor_right = (velocity[0] - (L * velocity[1])) / radius;
 
-    std::cout << "motor velocity left: " << motor_left << ", right: " << motor_right << '\n';
+    //std::cout << "motor velocity left: " << motor_left << ", right: " << motor_right << '\n';
     double rpm_left = motor_left * 30. / M_PI;
     double rpm_right = motor_right * 30. / M_PI;
     std::cout << "motor rpm left: " << vpMath::round(rpm_left) << ", right: " << vpMath::round(rpm_right) << '\n';
@@ -364,11 +366,14 @@ int main(int argc, const char **argv)
     std::vector<double> time_vec;
     while (!signal_stop) {
       // visp buffers images, clear out the buffer
-      double imageT;
+      double acquireTime;
       do {
-        imageT = vpTime::measureTimeMs();
+        auto acquireStart = vpTime::measureTimeMs();
       	g.acquire(I);
-      } while (vpTime::measureTimeMs() - imageT < 10);
+        auto acquireEnd = vpTime::measureTimeMs();
+        acquireTime = acquireEnd - acquireStart;
+	// std::cout << "Acquiring image took " << acquireTime << " ms\n";
+      } while (acquireTime < 10);
 
       // rotate image
       vpMatrix M(2, 3);
@@ -482,6 +487,7 @@ int main(int argc, const char **argv)
         if (vpDisplay::getClick(I2, false))
           break;
       }
+      if (!secure) usleep(100);
     }
 
     std::cout << "Benchmark computation time" << std::endl;
